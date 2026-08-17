@@ -56,6 +56,7 @@ View schema (Hyperbee keys → JSON values):
 | Key | Value | Written by op |
 |-----|-------|---------------|
 | `device/<writerKeyHex>` | `{ key, swarmKey, name, isCreator }` | `add-device` (deleted by `remove-device`) |
+| `creator` | `{ key }` — set by the first add-device; roster ops from any other author are ignored in apply | `add-device` (bootstrap only) |
 | `invite` | `{ id, invite, publicKey, expires }` (hex fields) | `add-invite` / `del-invite` |
 | `send/<id>` | `{ id, seq, from, targets:[hex], blob:{core,id}, meta, sentAt }` | `set-wallpaper` |
 | `send-seq` | `{ n }` — monotonic counter assigned in apply | `set-wallpaper` |
@@ -500,6 +501,7 @@ const b4a = require('b4a')
 // View keys. One module owns the key layout so scans stay consistent.
 const k = {
   device: (hex) => `device/${hex}`,
+  creator: 'creator',
   invite: 'invite',
   send: (id) => `send/${id}`,
   sendSeq: 'send-seq',
@@ -509,11 +511,27 @@ const k = {
 // The apply function: consumes ordered log nodes, mutates the view.
 // MUST be deterministic — every member runs this over the same op
 // sequence and must land on byte-identical views.
+//
+// ROSTER POLICY (creator-only, enforced HERE): apply is the group's
+// constitution — a compromised member can append any op it likes, but
+// every honest peer's apply ignores roster ops not authored by the
+// creator. The first add-device ever applied (createGroup's self-add)
+// establishes the creator. `node.from.key` is the authoring writer's
+// core key in autobase 7.x; if the pinned version names it differently,
+// check the autobase source and log the divergence.
 async function apply(nodes, view, base) {
   for (const node of nodes) {
     const op = node.value
+    const author = b4a.toString(node.from.key, 'hex')
     switch (op.type) {
       case 'add-device': {
+        const creator = await view.get(k.creator)
+        if (creator === null) {
+          // bootstrap: the very first add-device defines the creator
+          await view.put(k.creator, { key: op.key })
+        } else if (author !== creator.value.key) {
+          break // forged roster op from a non-creator: ignored by every honest peer
+        }
         await view.put(k.device(op.key), {
           key: op.key,
           swarmKey: op.swarmKey,
@@ -524,6 +542,9 @@ async function apply(nodes, view, base) {
         break
       }
       case 'remove-device': {
+        const creator = await view.get(k.creator)
+        if (creator === null || author !== creator.value.key) break // creator-only
+        if (op.key === creator.value.key) break // the creator cannot be removed
         await view.del(k.device(op.key))
         await base.removeWriter(b4a.from(op.key, 'hex'))
         break
@@ -1105,6 +1126,23 @@ test('revocation: removed device loses connectivity and leaves the roster', asyn
   await eventFlush()
   t.is(creator._connections.has(await joiner._swarmKeyHex()), false, 'connection torn down')
 })
+
+test('policy: a forged roster op from a non-creator is ignored by apply', async function (t) {
+  const { creator, joiner } = await pairedDuo(t)
+
+  await t.exception(() => joiner.removeDevice(creator.deviceKey), /only the creator/)
+
+  // Bypass the method entirely — append the raw op, as a compromised
+  // device would. Every honest peer's apply must ignore it.
+  const ops = require('../lib/ops.js')
+  await joiner._append(ops.removeDevice({ key: creator.deviceKey }))
+
+  await until(creator, 'update', async () =>
+    (await creator.base.view.get(`device/${joiner.deviceKey}`)) !== null
+  )
+  t.is((await creator.listDevices()).length, 2, 'creator still rostered on creator side')
+  t.is((await joiner.listDevices()).length, 2, 'forged op ignored even on the forger')
+})
 ```
 
 - [ ] **Step 2: Run to verify failure** — the stranger test fails (connection stays open) and `removeDevice` is not a function.
@@ -1139,6 +1177,8 @@ test('revocation: removed device loses connectivity and leaves the roster', asyn
   async removeDevice(key) {
     if (this.base === null) throw new Error('not in a group')
     if (key === this.deviceKey) throw new Error('cannot remove self')
+    const self = await this.base.view.get(k.device(this.deviceKey))
+    if (self === null || !self.value.isCreator) throw new Error('only the creator can remove devices')
     const record = await this.base.view.get(k.device(key))
     if (record === null) throw new Error('unknown device')
     await this._append(ops.removeDevice({ key }))
@@ -1146,6 +1186,8 @@ test('revocation: removed device loses connectivity and leaves the roster', asyn
     if (conn) conn.destroy()
   }
 ```
+
+(The method check gives non-creators a clear error; the *binding* enforcement is apply's authorship check — the method is UX, apply is law.)
 
 Also re-run the gate when the roster changes (a device removed while connected must be cut): in `_boot()` after the update listener, add:
 

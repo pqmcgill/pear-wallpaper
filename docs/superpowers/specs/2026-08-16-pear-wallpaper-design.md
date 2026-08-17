@@ -61,12 +61,106 @@ replaced by wallpaper operations.
 - **blind-pairing** — invite issuance/redemption and candidate
   approval.
 
-Sketch of the shell-facing API (to be specced in detail before
-implementation — see §8 Open Items): `createGroup()`, `createInvite()`,
-`joinGroup(invite)`, `approveCandidate()`, `listDevices()`,
-`sendWallpaper(image, targetDeviceIds)`, an event emitted when a
-wallpaper addressed to this device becomes applicable, and an
-`applied` acknowledgement.
+#### Core API (locked 2026-08-17)
+
+The complete shell-facing surface: 15 methods/getters, 4 events.
+Signatures are TypeScript-flavored; implementation is plain JS.
+
+**Lifecycle & identity**
+
+- `new WallpaperCore({ storageDir: string, deviceName: string })` —
+  single injection point for everything platform-owned, keeping the
+  core environment-agnostic.
+- `await core.ready(): Promise<void>` — completes storage/keypair init
+  and joins the swarm; the definite point after which getters and
+  events are valid.
+- `await core.close(): Promise<void>` — flushes and tears down swarm/
+  storage cleanly so Android's open → sync → close cycle never leaks.
+- `core.deviceKey: string` (hex) — the identity shells display during
+  pairing and match against the roster.
+- `core.groupStatus: 'none' | 'joining' | 'member'` — routes shells to
+  onboarding vs. main UI without probing internals.
+
+**Group formation & pairing**
+
+- `await core.createGroup(): Promise<void>` — bootstraps the autobase
+  with this device as creator and sole roster entry.
+- `await core.createInvite(): Promise<string>` — mints the single-use,
+  expiring invite string (QR-able); the only secret a human handles.
+- `await core.joinGroup(invite: string): Promise<void>` — redeems an
+  invite and resolves once approved and synced; the pending promise is
+  the joiner's "waiting for approval" UI state. Resumes from persisted
+  state after app restart.
+- `core.on('pairing-request', ({ candidateKey, name }) => …)` —
+  surfaces join attempts on the creator's device.
+- `await core.approve(candidateKey): Promise<void>` /
+  `await core.deny(candidateKey): Promise<void>` — the human
+  authorization gate; writes (or refuses) `add-device`. Creator-only;
+  throws elsewhere.
+
+**Roster**
+
+- `await core.listDevices(): Promise<Array<{ key, name, isSelf, online }>>`
+  — datasource for the send-target picker and device management.
+- `await core.removeDevice(key): Promise<void>` — revocation.
+- `core.on('roster-changed', () => …)` — keeps device-list UIs current
+  without polling.
+
+**Sending**
+
+- `await core.sendWallpaper(image: string | Buffer, targets: string[]): Promise<{ id }>`
+  — validates the image, stores the blob, appends `set-wallpaper`, and
+  resolves immediately (queued-delivery semantics; never waits on
+  targets).
+- `await core.listSends({ limit = 20 }): Promise<Array<{ id, meta, sentAt, targets: [{ key, status: 'pending' | 'delivered' }] }>>`
+  — backs the per-device delivered ✓ UI from `applied` acks.
+- `core.on('send-updated', ({ id }) => …)` — pushes delivery-status
+  flips so the UI doesn't poll.
+
+**Receiving**
+
+- `core.on('wallpaper', ({ id, filePath, fromKey, meta }) => …)` —
+  fires only when the newest unapplied wallpaper targeting this device
+  is fully fetched, validated, and written locally; the shell's
+  trigger to run the OS setter, with no partial-data cases.
+- `await core.pendingWallpaper(): Promise<entry | null>` — pull-based
+  twin of the event so freshly-woken shells check for work without
+  racing to attach listeners.
+- `await core.markApplied(id): Promise<void>` — the shell's
+  confirmation that the OS setter succeeded; core appends the
+  `applied` ack only here, which is what makes failed applies retry
+  instead of vanishing.
+- `await core.listReceived({ limit = 10 }): Promise<Array<{ id, filePath, fromKey, meta, appliedAt }>>`
+  — local history powering re-apply (shell re-runs its setter on an
+  old `filePath`; no protocol traffic).
+
+**Sync control**
+
+- `await core.sync({ timeoutMs = 30000 }): Promise<void>` — bounded
+  "connect, exchange with reachable peers, settle" round for Android's
+  periodic task; desktops never call it (`ready()` leaves them
+  continuously connected).
+
+Deliberate cuts: no `renameDevice` (names set at approval), no
+`cancelJoin` (`joinGroup` resumes after restart), no blob/GC
+management (deferred with pruning), no generic `update` event.
+
+#### Security properties (recorded from design review)
+
+- Unauthorized peers see nothing: non-rostered keys are dropped at the
+  Noise handshake before replication; independently, hypercore
+  replication is capability-based (data cannot even be requested
+  without the core key).
+- Pending candidates see nothing until approved — blind-pairing
+  discloses group keys only after approval; a denied candidate learns
+  nothing.
+- Roster exposure would be a privacy leak, never an authentication
+  break: authenticating as a public key requires proving possession of
+  the private key in the handshake, so key "spoofing" is not possible.
+- Known metadata boundary: an outsider who learned the (randomly
+  derived, non-guessable) swarm topic could observe IPs announcing on
+  it — presence metadata only, no group data. Accepted for personal
+  use.
 
 **Contract: shells never touch hypercore-family APIs directly.** They
 speak only the core API. All platforms therefore exercise identical
@@ -180,9 +274,6 @@ platform setter → append `applied` **only after the setter succeeds**
 
 ## 8. Open items
 
-- **Core API spec** — the §3.1 surface is a sketch; to be specced in
-  detail (and turned into the TDD test skeleton) before
-  implementation. *(Explicitly deferred during design review.)*
 - Always-on relay peer: optional, zero-redesign addition later.
 - Blob pruning: add if storage ever matters.
 - iOS sender-only mode / Shortcuts receiver: possible future phase.

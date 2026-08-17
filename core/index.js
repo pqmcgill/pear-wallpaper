@@ -139,14 +139,26 @@ class WallpaperCore extends ReadyResource {
     return activeJoin.promise
   }
 
-  // Close a stale/superseded join's candidate. Waits (briefly, bounded —
-  // candidate creation is local-only: corestore + keypair derivation, no
-  // network round trip) for the candidate to exist before closing it, so
-  // a supersede that lands in the narrow window before `requestJoin`
-  // returns doesn't leak an untracked, still-polling Candidate.
-  async _supersede(stale) {
+  // Force-settle a stale/superseded join: reject its pairing promise (so
+  // the suspended _runJoin frame awaiting it unblocks instead of leaking
+  // for the process lifetime — blind-pairing's Candidate.close() neither
+  // fires onadd nor emits 'rejected', so nothing else would ever wake it),
+  // close its candidate, then wait for _runJoin's own catch/finally to
+  // fully drain (pending-invite cleanup, _joining reset) before returning.
+  // Waits (briefly, bounded — candidate creation is local-only: corestore
+  // + keypair derivation, no network round trip) for the candidate to
+  // exist first, so settling that lands in the narrow window before
+  // `requestJoin` returns doesn't leak an untracked, still-polling
+  // Candidate.
+  async _settleJoin(stale, err) {
     await stale.candidateReady.catch(() => {})
+    if (stale.reject) stale.reject(err)
     if (stale.candidate) await stale.candidate.close().catch(() => {})
+    await stale.promise.catch(() => {})
+  }
+
+  _supersede(stale) {
+    return this._settleJoin(stale, new Error('superseded by a newer invite'))
   }
 
   async _runJoin(invite, activeJoin, resolveCandidateReady, rejectCandidateReady) {
@@ -184,15 +196,29 @@ class WallpaperCore extends ReadyResource {
         key: b4a.toString(this.base.key, 'hex'),
         encryptionKey: b4a.toString(this.base.encryptionKey, 'hex')
       })
-      await this.meta.del('pending-invite')
+      await this._clearPendingInviteIfStillMine(invite)
       await candidate.close().catch(() => {})
     } catch (err) {
       rejectCandidateReady(err) // no-op if candidateReady already settled
-      await this.meta.del('pending-invite').catch(() => {})
+      // A newer joinGroup() call may already have persisted its OWN
+      // pending-invite by the time this stale attempt's cleanup runs
+      // (e.g. under _close(), which doesn't serialize against a fresh
+      // joinGroup() the way supersede does) — never delete a pending-
+      // invite record that isn't this run's own.
+      await this._clearPendingInviteIfStillMine(invite)
       throw err
     } finally {
       this._joining = false
       if (this._activeJoin === activeJoin) this._activeJoin = null
+    }
+  }
+
+  async _clearPendingInviteIfStillMine(invite) {
+    try {
+      const pending = await this.meta.get('pending-invite')
+      if (pending !== null && pending.invite === invite) await this.meta.del('pending-invite')
+    } catch {
+      // best-effort cleanup only — never let this mask the real error
     }
   }
 
@@ -317,10 +343,7 @@ class WallpaperCore extends ReadyResource {
     if (this._activeJoin !== null) {
       const stale = this._activeJoin
       this._activeJoin = null
-      await stale.candidateReady.catch(() => {})
-      if (stale.reject) stale.reject(new Error('closed'))
-      if (stale.candidate) await stale.candidate.close().catch(() => {})
-      await stale.promise.catch(() => {})
+      await this._settleJoin(stale, new Error('closed'))
     }
     if (this.pairing !== null) await this.pairing.close().catch(() => {})
     if (this.swarm !== null) await this.swarm.destroy()

@@ -113,7 +113,7 @@ test('pairing: malformed candidate userData does not crash the creator', async f
 })
 
 test('pairing: joinGroup with a different invite supersedes the stale attempt', async function (t) {
-  t.plan(3)
+  t.plan(4)
   const tn = await makeTestnet(t)
 
   const creator = new WallpaperCore({
@@ -133,7 +133,7 @@ test('pairing: joinGroup with a different invite supersedes the stale attempt', 
   await joiner.ready()
   t.teardown(() => joiner.close())
 
-  joiner.joinGroup(inviteA).catch(() => {})
+  const firstJoin = joiner.joinGroup(inviteA)
   await until(joiner, 'roster-changed', () => joiner._activeJoin !== null && joiner._activeJoin.candidate !== null, 5000)
   const firstCandidate = joiner._activeJoin.candidate
 
@@ -141,6 +141,12 @@ test('pairing: joinGroup with a different invite supersedes the stale attempt', 
   creator.on('pairing-request', ({ candidateKey: ck }) => { candidateKey = ck })
 
   joiner.joinGroup(inviteB).catch(() => {})
+
+  // The superseded attempt's promise must settle (not hang forever) with
+  // a clear error — nothing else would ever wake it, since
+  // blind-pairing's Candidate.close() neither fires onadd nor emits
+  // 'rejected'.
+  await t.exception(firstJoin, /superseded/, 'superseded join promise rejects clearly')
 
   await until(firstCandidate, 'close', () => firstCandidate.closed, 5000)
   t.ok(firstCandidate.closed, 'superseded candidate was closed')

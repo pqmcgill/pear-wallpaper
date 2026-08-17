@@ -685,6 +685,7 @@ git add -A && git commit -m "feat(core): createGroup, autobase log, roster view"
 **Files:**
 - Create: `core/lib/pairer.js`
 - Modify: `core/index.js` (`_startSwarm`, `createInvite`, `joinGroup`, `'pairing-request'`)
+- Modify: `core/lib/apply.js` (creator-only guards on invite ops — ruled during design review)
 - Test: `core/test/04-pairing.test.js`
 
 **Interfaces:**
@@ -743,6 +744,25 @@ test('pairing: createInvite is idempotent until consumed', async function (t) {
 ```
 
 - [ ] **Step 2: Run to verify failure** — FAIL: `createInvite is not a function`.
+
+- [ ] **Step 3a: Extend the creator-only policy to invite ops in `core/lib/apply.js`** — a forged invite record is a social-engineering path (an attacker-planted invite makes a routine-looking pairing request). Guard both cases:
+
+```js
+      case 'add-invite': {
+        const creator = await view.get(k.creator)
+        if (creator === null || author !== creator.value.key) break // creator-only, like all authority ops
+        await view.put(k.invite, {
+          id: op.id, invite: op.invite, publicKey: op.publicKey, expires: op.expires
+        })
+        break
+      }
+      case 'del-invite': {
+        const creator = await view.get(k.creator)
+        if (creator === null || author !== creator.value.key) break // creator-only
+        await view.del(k.invite)
+        break
+      }
+```
 
 - [ ] **Step 3: Implement `_startSwarm` + `createInvite` in `index.js`** (member side; modeled on `reference/autopass/index.js:331-373`, with the human gate replacing auto-admit)
 
@@ -1144,6 +1164,20 @@ test('policy: a forged roster op from a non-creator is ignored by apply', async 
   )
   t.is((await creator.listDevices()).length, 2, 'creator still rostered on creator side')
   t.is((await joiner.listDevices()).length, 2, 'forged op ignored even on the forger')
+
+  // Forged invite ops are equally inert (creator-only, ruled in design review)
+  const BlindPairing = require('blind-pairing')
+  const b4a = require('b4a')
+  const forged = BlindPairing.createInvite(joiner.base.key)
+  await joiner._append(ops.addInvite({
+    id: b4a.toString(forged.id, 'hex'),
+    invite: b4a.toString(forged.invite, 'hex'),
+    publicKey: b4a.toString(forged.publicKey, 'hex'),
+    expires: forged.expires
+  }))
+  // Assert on the forger's own view: apply is deterministic and identical on
+  // every peer, so the op being ignored locally proves it is ignored everywhere.
+  t.is(await joiner.base.view.get('invite'), null, 'forged invite never lands in the view')
 })
 ```
 

@@ -68,3 +68,61 @@ brief assumed, and how it was resolved. One entry per divergence.
   `index.js`. Kept the require for fidelity to the brief's verbatim code
   rather than silently dropping it; noting it here as a leftover rather
   than a functional divergence.
+
+## Task 4 (review fix round): candidate-side error surface for expired/used/denied invites
+
+Investigated per review finding 4: does blind-pairing expose *any* way for
+the candidate to observe a member's non-zero-status response (rejected /
+invite-used / invite-expired), given `Candidate._poll()`
+(`core/node_modules/blind-pairing/index.js:650-667`) wraps everything in a
+`try { ... } catch { /* can run in bg, should never crash it */ }` that
+swallows thrown errors?
+
+- **A real surface exists, one level down.** `Candidate._addResponse()`
+  (`blind-pairing/index.js:559-571`) calls
+  `this.request.handleResponse(value)`. `request` is a `CandidateRequest`
+  (`blind-pairing-core/index.js:35-168`), and `CandidateRequest
+  .handleResponse()` (line 77) internally does
+  `try { this._openResponse(payload) } catch (err) { this.emit('rejected',
+  err); return null }`. `_openResponse()` (line 94) is where the coded
+  errors actually throw — `PAIRING_REJECTED` (status 1), `INVITE_USED`
+  (status 2), `INVITE_EXPIRED` (status 3) at lines 108-118. So the error
+  never reaches `Candidate._poll()`'s catch at all (it's caught one level
+  down, inside `handleResponse`) — instead it comes out as a `'rejected'`
+  event **on `candidate.request`** (a plain Node `EventEmitter`,
+  `blind-pairing-core/index.js:1,35`), with the real `PairingError`
+  (`.code` one of `PAIRING_REJECTED`/`INVITE_USED`/`INVITE_EXPIRED`,
+  `blind-pairing-core/lib/errors.js`) as the argument. `Candidate` itself
+  never relays this event — `candidate.request` has to be listened to
+  directly.
+- **Resolution:** `core/lib/pairer.js`'s `requestJoin()` now listens on
+  `candidate.request.on('rejected', (err) => reject(err))` right after
+  creating the candidate (before any polling starts, since
+  `Candidate._open()` — where polling begins — only runs after the
+  `ReadyResource` constructor's deferred `this.ready()`, so there's no
+  race). This turns a genuine member-side denial/expiry/reuse into a
+  clear rejection of `joinGroup()`'s promise, satisfying spec §6's
+  "expired/used invites fail with a clear message" for the case where a
+  response is ever actually sent back.
+- **Residual gap, left as documented, not hacked around:** this task's own
+  `_onCandidate` (the *member* side) reacts to an expired invite by
+  silently returning — i.e. it never calls `request.deny({ status: 3 })`,
+  so no response is ever sent and the candidate never receives the
+  `'rejected'` event for *that* case; it just keeps polling until
+  superseded (finding 3's recovery path) or the process closes. Wiring an
+  explicit `deny()` call for the expiry case was judged out of this task's
+  scope (the review ruling only asked `_onCandidate` to "ignore" expired
+  candidates); it would be a natural, small follow-up if a clean
+  candidate-side error message for *this specific* case is wanted, since
+  the plumbing (`candidate.request`'s `'rejected'` event) is now already
+  wired end-to-end and will fire correctly for it.
+- **Also confirmed while investigating:** `Autobase.prototype
+  .waitForWritable()` exists at `core/node_modules/autobase/index.js:1992-
+  1996` (`if (this.writable) return Promise.resolve(true); if
+  (!this._writable) this._writable = rrp(); return this._writable.promise`)
+  and is resolved at line 1882 (`if (this.writable && this._writable)
+  this._writable.resolve(true)`) — leak-free, no listener to remove on
+  close. `core/index.js`'s `_runJoin` now uses it when present, falling
+  back to the original hand-rolled `base.on('update', check)` wait
+  (with `.off()` cleanup already in place) only if it's ever absent under
+  a different pinned version.

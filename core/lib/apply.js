@@ -55,12 +55,16 @@ async function apply(nodes, view, base) {
         break
       }
       case 'add-invite': {
+        const creator = await view.get(k.creator)
+        if (creator === null || author !== creator.value.key) break // creator-only, like all authority ops
         await view.put(k.invite, {
           id: op.id, invite: op.invite, publicKey: op.publicKey, expires: op.expires
         })
         break
       }
       case 'del-invite': {
+        const creator = await view.get(k.creator)
+        if (creator === null || author !== creator.value.key) break // creator-only
         await view.del(k.invite)
         break
       }

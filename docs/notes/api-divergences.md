@@ -37,3 +37,34 @@ brief assumed, and how it was resolved. One entry per divergence.
     key on the local core; passing the persisted hex back in as
     `encryptionKey` on reopen reuses it. Matches the brief's reopen path via
     `meta.get('group')`.
+
+## Task 4: blind-pairing API matched the brief; two minor notes
+
+- **Checked against installed `blind-pairing@2.x` and `blind-pairing-core`
+  source** (`core/node_modules/blind-pairing/index.js`,
+  `core/node_modules/blind-pairing-core/index.js`): `Member`'s `onadd`
+  receives a `MemberRequest` (has `.inviteId`, `.open(publicKey)` →
+  returns/sets `.userData`, `.confirm({key, encryptionKey, additional})`,
+  `.deny()`), and `Candidate`'s `onadd` receives the resolved
+  `{ key, encryptionKey, data }` auth object. `member.flushed()` exists on
+  `Member` and proxies to the swarm discovery-topic's `.flushed()`.
+  `BlindPairing.createInvite(key)` returns
+  `{ id, invite, seed, publicKey, additional, discoveryKey, expires,
+  sensitive, testInvitation }` — the brief's destructuring of
+  `{ id, invite, publicKey, expires }` is a correct subset. No code changes
+  were needed beyond what the brief specified verbatim.
+- **`additional` is `null` in this task:** `createInvite` is called with no
+  second argument, so `blind-pairing-core`'s `createInvite(key, opts = {})`
+  never receives `opts.data`, making `additional: null`. Nothing to thread
+  through Task 5 as a result — the invite record stored in the view
+  (`id`, `invite`, `publicKey`, `expires`) has no `additional` field to add.
+  Flagged per the task-4 instructions for the controller to confirm Task 5
+  doesn't need it.
+- **Unused `compact-encoding` (`c`) import:** the brief's Step 3 require
+  block for `core/index.js` lists `const c = require('compact-encoding')`,
+  copied from the autopass reference (which uses `c.encode`/`c.decode` for
+  structured `userData`/invite metadata). This task's candidate `userData`
+  is plain JSON (per the interface spec), so `c` ends up unused in
+  `index.js`. Kept the require for fidelity to the brief's verbatim code
+  rather than silently dropping it; noting it here as a leftover rather
+  than a functional divergence.

@@ -199,7 +199,8 @@ test('two swarms exchange a hypercore block over a local testnet', async functio
   swarmA.on('connection', (conn) => storeA.replicate(conn))
   swarmB.on('connection', (conn) => storeB.replicate(conn))
 
-  swarmA.join(coreA.discoveryKey)
+  const discovery = swarmA.join(coreA.discoveryKey)
+  await discovery.flushed() // A's announce must reach the DHT before B looks up
   swarmB.join(coreA.discoveryKey)
 
   const coreB = storeB.get(coreA.key) // capability: knowing the key IS the read grant

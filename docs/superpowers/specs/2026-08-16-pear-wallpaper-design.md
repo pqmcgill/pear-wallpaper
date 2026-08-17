@@ -274,6 +274,11 @@ platform setter → append `applied` **only after the setter succeeds**
 
 ## 8. Open items
 
+- Key custody hardening (post-MVP): optional `primaryKey` constructor
+  option so shells can source the corestore seed from the OS keychain
+  (device-local, non-syncing) instead of disk; recommended creator
+  posture is full-disk encryption + OS keychain. Deliberately not a
+  cloud password manager — device identities must not leave the device.
 - Always-on relay peer: optional, zero-redesign addition later.
 - Blob pruning: add if storage ever matters.
 - iOS sender-only mode / Shortcuts receiver: possible future phase.

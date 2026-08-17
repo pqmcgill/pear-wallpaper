@@ -440,6 +440,7 @@ test('createGroup: group survives reopen', async function (t) {
   const devices = await core2.listDevices()
   t.is(devices.length, 1)
   t.is(devices[0].name, 'alpha')
+  t.is(devices[0].key, core2.deviceKey, 'roster key IS the reopened local-writer key')
   await core2.close()
 })
 
@@ -464,8 +465,8 @@ const crypto = require('hypercore-crypto')
 const b4a = require('b4a')
 
 module.exports = {
-  addDevice({ key, swarmKey, name, isCreator = false }) {
-    return { type: 'add-device', key, swarmKey, name, isCreator }
+  addDevice({ key, swarmKey, name }) {
+    return { type: 'add-device', key, swarmKey, name } // isCreator is DERIVED in apply, never carried in the op
   },
   removeDevice({ key }) {
     return { type: 'remove-device', key }
@@ -527,16 +528,19 @@ async function apply(nodes, view, base) {
       case 'add-device': {
         const creator = await view.get(k.creator)
         if (creator === null) {
-          // bootstrap: the very first add-device defines the creator
-          await view.put(k.creator, { key: op.key })
+          // bootstrap: the very first add-device defines the creator —
+          // bound to the VERIFIED author, never the op's claimed key
+          if (op.key !== author) break
+          await view.put(k.creator, { key: author })
         } else if (author !== creator.value.key) {
           break // forged roster op from a non-creator: ignored by every honest peer
         }
+        const creatorKey = creator === null ? author : creator.value.key
         await view.put(k.device(op.key), {
           key: op.key,
           swarmKey: op.swarmKey,
           name: op.name,
-          isCreator: op.isCreator === true
+          isCreator: op.key === creatorKey // derived, never self-reported
         })
         await base.addWriter(b4a.from(op.key, 'hex'))
         break
@@ -616,8 +620,7 @@ Add requires: `Hyperbee`, `Hyperswarm`, `{ apply, k }` from `./lib/apply.js`, `o
     await this._append(ops.addDevice({
       key: this.deviceKey,
       swarmKey: await this._swarmKeyHex(),
-      name: this.deviceName,
-      isCreator: true
+      name: this.deviceName
     }))
     await this.meta.put('group', {
       key: b4a.toString(this.base.key, 'hex'),
@@ -1030,8 +1033,7 @@ Use `t.plan(3)` on the deny test so it ends after the three assertions inside th
     await this._append(ops.addDevice({
       key: pending.key,
       swarmKey: pending.swarmKey,
-      name: pending.name,
-      isCreator: false
+      name: pending.name
     }))
     const inv = await this.base.view.get(k.invite)
     pending.candidate.confirm({

@@ -29,16 +29,19 @@ async function apply(nodes, view, base) {
       case 'add-device': {
         const creator = await view.get(k.creator)
         if (creator === null) {
-          // bootstrap: the very first add-device defines the creator
-          await view.put(k.creator, { key: op.key })
+          // bootstrap: the very first add-device defines the creator —
+          // bound to the VERIFIED author, never the op's claimed key
+          if (op.key !== author) break
+          await view.put(k.creator, { key: author })
         } else if (author !== creator.value.key) {
           break // forged roster op from a non-creator: ignored by every honest peer
         }
+        const creatorKey = creator === null ? author : creator.value.key
         await view.put(k.device(op.key), {
           key: op.key,
           swarmKey: op.swarmKey,
           name: op.name,
-          isCreator: op.isCreator === true
+          isCreator: op.key === creatorKey // derived, never self-reported
         })
         await base.addWriter(b4a.from(op.key, 'hex'))
         break

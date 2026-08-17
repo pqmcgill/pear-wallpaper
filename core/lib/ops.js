@@ -5,8 +5,8 @@ const crypto = require('hypercore-crypto')
 const b4a = require('b4a')
 
 module.exports = {
-  addDevice({ key, swarmKey, name, isCreator = false }) {
-    return { type: 'add-device', key, swarmKey, name, isCreator }
+  addDevice({ key, swarmKey, name }) {
+    return { type: 'add-device', key, swarmKey, name } // isCreator is DERIVED in apply, never carried in the op
   },
   removeDevice({ key }) {
     return { type: 'remove-device', key }

@@ -31,6 +31,7 @@ test('createGroup: group survives reopen', async function (t) {
   const devices = await core2.listDevices()
   t.is(devices.length, 1)
   t.is(devices[0].name, 'alpha')
+  t.is(devices[0].key, core2.deviceKey, 'roster key IS the reopened local-writer key')
   await core2.close()
 })
 

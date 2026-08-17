@@ -79,8 +79,7 @@ class WallpaperCore extends ReadyResource {
     await this._append(ops.addDevice({
       key: this.deviceKey,
       swarmKey: await this._swarmKeyHex(),
-      name: this.deviceName,
-      isCreator: true
+      name: this.deviceName
     }))
     await this.meta.put('group', {
       key: b4a.toString(this.base.key, 'hex'),

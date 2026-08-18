@@ -1513,6 +1513,7 @@ git add -A && git commit -m "feat(core): sendWallpaper with validation; listSend
 
 **Files:**
 - Modify: `core/index.js` (`_checkIncoming`, `pendingWallpaper`, `'wallpaper'` event, received-file writing)
+- Modify: `core/lib/blobs.js` — `get(ref, { timeoutMs = 0 } = {})` forwards `{ timeout: timeoutMs }` to hyperblobs (0 = wait forever, unchanged default). Ruled after Task 7 review: an unfetchable blob (revoked sender, offline peer, garbage ref) must not wedge the receive/relay loops — callers here and in Task 11 pass a bound (30s) and treat rejection as pending-retry (spec §6).
 - Test: `core/test/09-receive.test.js`
 
 **Interfaces:**
@@ -1616,7 +1617,7 @@ const path = require('path')
       await fs.promises.access(filePath)
       return filePath // already on disk
     } catch {}
-    const buffer = await this.blobs.get(entry.blob)
+    const buffer = await this.blobs.get(entry.blob, { timeoutMs: 30000 }) // bounded: rejection = stays pending, retried next sync
     const tmpPath = filePath + '.part'
     await fs.promises.writeFile(tmpPath, buffer)
     await fs.promises.rename(tmpPath, filePath) // atomic: shells never see partial files
@@ -1871,7 +1872,7 @@ test('offline delivery: relay carries a send after the sender leaves', async fun
         if ((await this.base.view.get(k.ack(s.id, target))) === null) done = false
       }
       if (done) continue
-      await this.blobs.get(s.blob).catch(() => {}) // best effort; retried next sync
+      await this.blobs.get(s.blob, { timeoutMs: 30000 }).catch(() => {}) // bounded best effort; retried next sync
     }
   }
 

@@ -1191,6 +1191,7 @@ test('policy: a forged roster op from a non-creator is ignored by apply', async 
     // Gate check is async; buffer nothing meanwhile — replication attaches only after the check.
     this._gate(remote).then((allowed) => {
       if (!allowed) return conn.destroy()
+      if (conn.destroyed) return // closed during the async gate: never store a phantom
       this._connections.set(remote, conn)
       conn.on('close', () => {
         if (this._connections.get(remote) === conn) this._connections.delete(remote)
@@ -1207,7 +1208,10 @@ test('policy: a forged roster op from a non-creator is ignored by apply', async 
       if (node.value.swarmKey === remoteSwarmKeyHex) return true
     }
     const invite = await this.base.view.get(k.invite)
-    return invite !== null // pairing window open: allow (blind-pairing runs, replication limited to gate re-check after approval)
+    // Pairing window open: allow. NOTE the real exposure — an invite-window
+    // connection gets full store.replicate; the window must therefore be
+    // bounded by expiry or an abandoned invite silently reverses revocation.
+    return invite !== null && (invite.value.expires === 0 || Date.now() <= invite.value.expires)
   }
 
   async removeDevice(key) {

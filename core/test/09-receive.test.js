@@ -1,6 +1,8 @@
 const test = require('brittle')
 const fs = require('fs')
 const b4a = require('b4a')
+const ops = require('../lib/ops.js')
+const { k } = require('../lib/apply.js')
 const { pairedDuo, until } = require('./helpers')
 
 function fakePng(size = 4096) {
@@ -45,4 +47,27 @@ test('receive: only the newest send per target surfaces', async function (t) {
     return e !== null && e.id === second.id
   })
   t.pass('stale send is skipped, newest surfaces')
+})
+
+// C3 regression. pendingWallpaper() is documented (README, spec §6) to
+// return `entry | null` and never a hard error — the Android background
+// recipe awaits it unguarded. A blob nobody can serve, or a malformed ref
+// from a compromised member, is a skip, not a crash.
+test('receive: an unfetchable blob makes pendingWallpaper resolve null, never throw', async function (t) {
+  const { creator, joiner } = await pairedDuo(t)
+
+  // The ref itself is validated, so garbage fails fast and clearly instead
+  // of blowing up somewhere inside corestore.
+  await t.exception(() => joiner.blobs.get({ core: 'nope', id: null }), /invalid blob ref/)
+
+  const bad = ops.setWallpaper({
+    from: creator.deviceKey,
+    targets: [joiner.deviceKey],
+    blob: { core: 'nope', id: null },
+    meta: { ext: '.png', byteLength: 16, filename: null }
+  })
+  await creator._append(bad)
+  await until(joiner, 'update', async () => (await joiner.base.view.get(k.send(bad.id))) !== null)
+
+  t.is(await joiner.pendingWallpaper(), null, 'resolves null rather than rejecting')
 })

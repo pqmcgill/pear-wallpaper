@@ -1,8 +1,9 @@
 const test = require('brittle')
 const b4a = require('b4a')
 const WallpaperCore = require('../index.js')
+const ops = require('../lib/ops.js')
 const { k } = require('../lib/apply.js')
-const { trio, pairedDuo } = require('./helpers')
+const { trio, pairedDuo, until } = require('./helpers')
 
 function fakePng(size = 4096) {
   const buf = b4a.alloc(size)
@@ -60,4 +61,35 @@ test('sync: first-update floor waits past the quiet window for in-flight replica
 
   const node = await joiner.base.view.get(k.send(sentId))
   t.ok(node !== null, 'op appended 400ms after sync started was still ingested')
+})
+
+// I2 regression. sync() is the Android shell's ONLY receive opportunity.
+// A single blob nobody can serve used to eat the whole budget: relay ran
+// before the receive step, and both steps were silently skipped whenever a
+// prior update-driven sweep was still in flight (_relaying / _applyBusy).
+// Here the joiner's event-driven receive sweep is deliberately wedged on an
+// unfetchable blob (30s bound) before a perfectly fetchable wallpaper
+// arrives — only sync() can deliver it.
+test('sync: an unfetchable blob does not starve the receive step', async function (t) {
+  const { creator, joiner } = await pairedDuo(t)
+
+  // A send whose blob no peer can ever supply: a well-formed ref to a core
+  // that does not exist. Appended raw, author-bound `from` so apply keeps it.
+  const stuck = ops.setWallpaper({
+    from: creator.deviceKey,
+    targets: [joiner.deviceKey],
+    blob: { core: 'ab'.repeat(32), id: { blockOffset: 0, blockLength: 1, byteOffset: 0, byteLength: 32 } },
+    meta: { ext: '.png', byteLength: 32, filename: null }
+  })
+  await creator._append(stuck)
+  await until(joiner, 'update', async () => (await joiner.base.view.get(k.send(stuck.id))) !== null)
+  await until(joiner, 'update', () => joiner._applyBusy === true, 5000)
+
+  let got = null
+  joiner.on('wallpaper', (entry) => { got = entry })
+  const { id } = await creator.sendWallpaper(fakePng(), [joiner.deviceKey])
+
+  await joiner.sync({ timeoutMs: 15000 })
+  t.ok(got !== null, 'sync() ran its receive step despite the stalled blob')
+  t.is(got && got.id, id, 'and delivered the fetchable wallpaper, not the stuck one')
 })

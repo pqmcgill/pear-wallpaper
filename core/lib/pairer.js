@@ -1,4 +1,3 @@
-const Hyperswarm = require('hyperswarm')
 const Autobase = require('autobase')
 const z32 = require('z32')
 const b4a = require('b4a')

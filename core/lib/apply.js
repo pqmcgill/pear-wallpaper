@@ -69,6 +69,11 @@ async function apply(nodes, view, base) {
         break
       }
       case 'set-wallpaper': {
+        // AUTHOR BINDING: `from` drives the "who sent this" UI and
+        // listReceived's fromKey, so it is the verified author or nothing.
+        // Honest code always passes its own key (sendWallpaper does), so
+        // legitimate sends are unaffected.
+        if (op.from !== author) break
         const seqNode = await view.get(k.sendSeq)
         const seq = seqNode === null ? 1 : seqNode.value.n + 1
         await view.put(k.sendSeq, { n: seq })
@@ -79,6 +84,14 @@ async function apply(nodes, view, base) {
         break
       }
       case 'applied': {
+        // AUTHOR BINDING: only a device may ack its OWN delivery. Unbound,
+        // any member could forge a peer's ack — which permanently suppresses
+        // that peer's delivery (_newestUnappliedForMe skips acked sends, so
+        // the retry is dead, not delayed), shows the sender a false
+        // delivered check, and injects a listReceived row whose filePath
+        // never exists. markApplied always passes this.deviceKey, so honest
+        // acks are unaffected.
+        if (op.device !== author) break
         await view.put(k.ack(op.sendId, op.device), { appliedAt: op.appliedAt })
         break
       }

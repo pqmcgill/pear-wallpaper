@@ -7,7 +7,6 @@ const Hyperswarm = require('hyperswarm')
 const ReadyResource = require('ready-resource')
 const BlindPairing = require('blind-pairing')
 const z32 = require('z32')
-const c = require('compact-encoding')
 const b4a = require('b4a')
 const LocalMeta = require('./lib/meta.js')
 const BlobStore = require('./lib/blobs.js')
@@ -38,6 +37,11 @@ class WallpaperCore extends ReadyResource {
     this.member = null
     this._pending = null
     this._connections = null
+    // Connections we have attached store.replicate() to. Keyed on the
+    // stream object, not the remote key: store.replicate must run at most
+    // once per stream, and a reconnecting peer arrives as a NEW stream
+    // under the same key. WeakSet so a dropped connection needs no cleanup.
+    this._replicating = new WeakSet()
     this._joining = false
     this._activeJoin = null // { invite, candidate, candidateReady, reject, promise } while joinGroup is in flight
     this._deviceKey = null
@@ -220,6 +224,13 @@ class WallpaperCore extends ReadyResource {
       await candidate.close().catch(() => {})
     } catch (err) {
       rejectCandidateReady(err) // no-op if candidateReady already settled
+      // Every natural failure lands here (denied / invite used / expired),
+      // and _activeJoin is nulled in the finally below — so a candidate left
+      // open here is unreachable AND still announcing, re-polling the DHT
+      // every ~7min for the process lifetime. Android's restart-resume
+      // (_open's pending-invite replay) accumulates one per failed attempt.
+      // Idempotent: the supersede path may already have closed it.
+      if (activeJoin.candidate !== null) await activeJoin.candidate.close().catch(() => {})
       // A newer joinGroup() call may already have persisted its OWN
       // pending-invite by the time this stale attempt's cleanup runs
       // (e.g. under _close(), which doesn't serialize against a fresh
@@ -289,6 +300,9 @@ class WallpaperCore extends ReadyResource {
     if (this.base === null) return []
     const sends = []
     for await (const node of this.base.view.createReadStream({ gte: 'send/', lt: 'send0' })) {
+      // THIS device's sent history (README) — the send/ range holds every
+      // member's sends, and a peer's send must never appear here as ours.
+      if (node.value.from !== this.deviceKey) continue
       sends.push(node.value)
     }
     sends.sort((a, b) => b.seq - a.seq)
@@ -387,21 +401,33 @@ class WallpaperCore extends ReadyResource {
     this._lastAcks = acks
   }
 
-  // Called on every base update (wired in _boot).
-  async _checkIncoming() {
-    if (this.base === null || this.blobs === null || !this.blobs.local) return
-    if (this._applyBusy) return
+  // Called on every base update (wired in _boot). Coalescing wrapper: a
+  // burst of updates must not stack sweeps, each doing a bounded-but-slow
+  // blobs.get. sync() deliberately does NOT come through here — see _receive.
+  _checkIncoming() {
+    if (this._applyBusy) return Promise.resolve()
     this._applyBusy = true
-    try {
-      const entry = await this._newestUnappliedForMe()
-      if (entry === null) return
-      if (this._lastEmitted === entry.id) return
-      const filePath = await this._materialize(entry)
-      this._lastEmitted = entry.id
-      this.emit('wallpaper', { id: entry.id, filePath, fromKey: entry.from, meta: entry.meta })
-    } finally {
-      this._applyBusy = false
-    }
+    return this._receive().finally(() => { this._applyBusy = false })
+  }
+
+  // One receive sweep: materialize the newest send addressed to us that we
+  // haven't acked, and announce it.
+  //
+  // Safe to run while an event-driven sweep is already in flight, which is
+  // exactly what sync() needs: an update-driven sweep wedged on an
+  // unfetchable blob (up to 30s) must not turn sync()'s receive step — the
+  // Android shell's ONLY receive opportunity — into a silent no-op. Two
+  // concurrent sweeps can't collide: _materialize dedupes per send id, and
+  // the emit is guarded on _lastEmitted before AND after the await.
+  async _receive() {
+    if (this.base === null || this.blobs === null || !this.blobs.local) return
+    const entry = await this._newestUnappliedForMe()
+    if (entry === null) return
+    if (this._lastEmitted === entry.id) return
+    const filePath = await this._materialize(entry)
+    if (this._lastEmitted === entry.id) return // a concurrent sweep announced it first
+    this._lastEmitted = entry.id
+    this.emit('wallpaper', { id: entry.id, filePath, fromKey: entry.from, meta: entry.meta })
   }
 
   // Newest send targeting us that we haven't acked yet — "unapplied" here
@@ -454,12 +480,23 @@ class WallpaperCore extends ReadyResource {
   }
 
   // For shells that wake up late and missed the 'wallpaper' event.
+  //
+  // Contract (spec §6, README): resolves to `entry | null`, NEVER a hard
+  // error — the Android background recipe awaits this unguarded. The
+  // mainline offline case (no online peer holds the blob yet) makes
+  // _materialize's bounded blobs.get reject, and a malformed ref from a
+  // compromised member rejects immediately; both are "nothing to show yet",
+  // so the send simply stays unacked and is retried on the next sync.
   async pendingWallpaper() {
     if (this.base === null) return null
     const entry = await this._newestUnappliedForMe()
     if (entry === null) return null
-    const filePath = await this._materialize(entry)
-    return { id: entry.id, filePath, fromKey: entry.from, meta: entry.meta }
+    try {
+      const filePath = await this._materialize(entry)
+      return { id: entry.id, filePath, fromKey: entry.from, meta: entry.meta }
+    } catch {
+      return null
+    }
   }
 
   // Download blobs for EVERY unapplied send (not just ours), so this
@@ -473,7 +510,7 @@ class WallpaperCore extends ReadyResource {
   // blobs.get() per un-acked send. A single in-flight sweep is enough —
   // later 'update's will trigger their own sweep once this one finishes.
   async _relayBlobs() {
-    if (this.base === null) return
+    if (this.base === null || this.blobs === null || !this.blobs.local) return
     if (this._relaying) return
     this._relaying = true
     try {
@@ -484,6 +521,11 @@ class WallpaperCore extends ReadyResource {
           if ((await this.base.view.get(k.ack(s.id, target))) === null) done = false
         }
         if (done) continue
+        // Already hold every block? Nothing to fetch. Without this, each
+        // update re-ran a full (bounded, but up-to-30s-per-blob) download
+        // for blobs already on disk, and re-swept forever-unacked sends to
+        // revoked devices for the life of the group.
+        if (await this.blobs.has(s.blob)) continue
         await this.blobs.get(s.blob, { timeoutMs: 30000 }).catch(() => {}) // bounded best effort; retried next sync
       }
     } finally {
@@ -525,8 +567,15 @@ class WallpaperCore extends ReadyResource {
     const work = (async () => {
       await this.swarm.flush()          // announced + pending connections done
       await this._settle(timeoutMs)     // ingest whatever connected peers have (event-driven; see divergence note)
-      await this._relayBlobs()
-      await this._checkIncoming()
+      // RECEIVING FIRST, and via _receive() rather than the coalescing
+      // _checkIncoming(): relaying awaits up to 30s per un-acked blob, so a
+      // single blob nobody can serve — the exact offline case this method
+      // exists for — used to eat the whole budget and starve the step that
+      // actually delivers to this device. Each step is caught on its own so
+      // one failing step can't skip the other (a bounded blobs.get rejects
+      // routinely), and the whole chain is still raced against timeoutMs.
+      await this._receive().catch(noop)
+      await this._relayBlobs().catch(noop)
     })().catch(noop)
     await Promise.race([work, timeout])
     clearTimeout(timer)
@@ -616,7 +665,7 @@ class WallpaperCore extends ReadyResource {
     // still the source of truth for connection bookkeeping below.
     conn.on('error', () => {})
     // Gate check is async; buffer nothing meanwhile — replication attaches only after the check.
-    this._gate(remote).then((allowed) => {
+    this._gate(remote).then(async (allowed) => {
       if (!allowed) return conn.destroy()
       if (conn.destroyed) return // closed during the async gate: never store a phantom
       this._connections.set(remote, conn)
@@ -624,30 +673,69 @@ class WallpaperCore extends ReadyResource {
         if (this._connections.get(remote) === conn) this._connections.delete(remote)
         this.emit('roster-changed')
       })
-      this.store.replicate(conn) // replicates the base AND blob cores (Task 7)
+      // Replication is NOT part of the invite exemption. A remote admitted
+      // only because a pairing window happens to be open keeps its socket
+      // (blind-pairing rides it on its own protomux channel, independent of
+      // store.replicate) but gets no access to the group's cores: blob
+      // cores are unencrypted, so a leaked ref is the entire capability,
+      // and a revoked ex-member still holds the view's encryption key. Such
+      // a connection is upgraded the moment its key lands on the roster —
+      // approve() does it directly, _enforceGate does it on roster-changed.
+      // `base === null` means WE are the joiner: replicating then exposes
+      // only our own (empty) cores, and the base we are about to boot needs
+      // the stream already attached.
+      if (this.base === null || (await this._isRostered(remote))) this._replicate(conn)
       this.emit('roster-changed')
     }, () => conn.destroy())
   }
 
-  // Roster gate: rostered swarm keys replicate; strangers are destroyed
-  // unless an invite is outstanding (the pairing window BlindPairing needs
-  // the wire for) or we haven't booted a base yet (still pairing ourselves).
+  // Attach store.replicate to a gated connection, at most once per stream
+  // (store.replicate is not idempotent — a second call on the same stream
+  // would open a duplicate set of channels).
+  _replicate(conn) {
+    if (conn.destroyed || this._replicating.has(conn)) return
+    this._replicating.add(conn)
+    this.store.replicate(conn) // replicates the base AND blob cores (Task 7)
+  }
+
+  // Roster gate: may this remote hold a socket at all? Strangers are
+  // destroyed unless an invite is outstanding (the pairing window
+  // BlindPairing needs the wire for) or we haven't booted a base yet (still
+  // pairing ourselves). NOTE this is strictly weaker than "may replicate" —
+  // see _isRostered and _onConnection.
   async _gate(remoteSwarmKeyHex) {
     if (this.base === null) return true // still pairing: BlindPairing needs the wire
-    for await (const node of this.base.view.createReadStream({ gte: 'device/', lt: 'device0' })) {
-      if (node.value.swarmKey === remoteSwarmKeyHex) return true
-    }
+    if (await this._isRostered(remoteSwarmKeyHex)) return true
     const invite = await this.base.view.get(k.invite)
-    // Pairing window open: allow. NOTE the real exposure — an invite-window
-    // connection gets full store.replicate; the window must therefore be
-    // bounded by expiry or an abandoned invite silently reverses revocation.
+    // Pairing window open: allow the SOCKET only (see _onConnection — no
+    // store.replicate rides this exemption), and only while unexpired.
     return invite !== null && (invite.value.expires === 0 || Date.now() <= invite.value.expires)
   }
 
+  // Does this swarm key belong to a rostered device? The one condition that
+  // earns replication, as opposed to _gate's weaker "may hold the socket".
+  async _isRostered(remoteSwarmKeyHex) {
+    if (this.base === null) return false
+    for await (const node of this.base.view.createReadStream({ gte: 'device/', lt: 'device0' })) {
+      if (node.value.swarmKey === remoteSwarmKeyHex) return true
+    }
+    return false
+  }
+
+  // Runs on every 'roster-changed'. Two jobs: drop connections the gate no
+  // longer allows (revocation, invite expiry/burn), and upgrade the ones
+  // admitted on the invite exemption alone once their key appears on the
+  // roster — that post-approval upgrade is what lets pairing ride a
+  // non-replicating socket in the first place.
   async _enforceGate() {
     if (this.base === null || !this._connections) return
     for (const [remote, conn] of this._connections) {
-      if (!(await this._gate(remote))) conn.destroy()
+      if (!(await this._gate(remote))) {
+        conn.destroy()
+        continue
+      }
+      if (this._replicating.has(conn)) continue
+      if (await this._isRostered(remote)) this._replicate(conn)
     }
   }
 
@@ -763,6 +851,15 @@ class WallpaperCore extends ReadyResource {
         swarmKey: pending.swarmKey,
         name: pending.name
       }))
+      // This candidate's connection was admitted on the invite exemption
+      // alone, so it is NOT replicating yet. Upgrade it here, BEFORE handing
+      // over the group keys: the joiner boots its base and waits to become
+      // writable the moment confirm() lands, and it can only do that over a
+      // replicating stream. The roster-changed -> _enforceGate path gets
+      // there too, but only after the append shows up in the view — a race
+      // this side of the wire has no reason to run.
+      const conn = this._connections.get(pending.swarmKey)
+      if (conn) this._replicate(conn)
       // The stored invite record has no `additional` field (createInvite is
       // never called with `data`) — pass it explicitly as null rather than
       // reference `inv.value.additional`, which doesn't exist. See Task 4/5

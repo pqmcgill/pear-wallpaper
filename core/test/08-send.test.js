@@ -37,6 +37,21 @@ test('sendWallpaper: op lands in both views, status pending', async function (t)
   t.pass('op replicated to the target')
 })
 
+// I1 regression. listSends() is "this device's sent history" (README) and
+// backs the per-device delivered-check UI — a peer's sends must not show up
+// in it as if we had sent them.
+test('listSends: only this device\'s own sends appear', async function (t) {
+  const { creator, joiner } = await pairedDuo(t)
+
+  const { id } = await joiner.sendWallpaper(fakePng(), [creator.deviceKey])
+  await until(creator, 'update', async () => (await creator.base.view.get(`send/${id}`)) !== null)
+
+  t.is((await creator.listSends()).length, 0, "another device's send is not in our sent history")
+  const mine = await joiner.listSends()
+  t.is(mine.length, 1)
+  t.is(mine[0].id, id, 'the sender still sees its own send')
+})
+
 test('sendWallpaper: rejects unknown targets', async function (t) {
   const { creator } = await pairedDuo(t)
   await t.exception(

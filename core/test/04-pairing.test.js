@@ -143,6 +143,46 @@ test('pairing: malformed candidate userData does not crash the creator', async f
   t.is(await creator.createInvite(), invite, 'creator survives and is still functional')
 })
 
+// I3 regression. Only the supersede/success paths closed the candidate, so
+// every natural failure (deny / used / expired) left a Candidate announcing
+// and DHT-polling every ~7min for the process lifetime, unreachable
+// (_activeJoin is already nulled). Android's restart-resume accumulates them.
+test('pairing: a denied joinGroup closes its candidate', async function (t) {
+  const tn = await makeTestnet(t)
+  const creator = new WallpaperCore({
+    storageDir: await tmpDir(t), deviceName: 'creator', bootstrap: tn.bootstrap
+  })
+  await creator.ready()
+  await creator.createGroup()
+  t.teardown(() => creator.close())
+
+  const invite = await creator.createInvite()
+  const joiner = new WallpaperCore({
+    storageDir: await tmpDir(t), deviceName: 'phone', bootstrap: tn.bootstrap
+  })
+  await joiner.ready()
+  t.teardown(() => joiner.close())
+
+  creator.on('pairing-request', ({ candidateKey }) => { creator.deny(candidateKey).catch(() => {}) })
+
+  const join = joiner.joinGroup(invite)
+  join.catch(() => {}) // observed by t.exception below; keep Node quiet meanwhile
+
+  // Grab the candidate before _runJoin's finally nulls _activeJoin. Candidate
+  // creation is local-only (corestore + keypair), so a tight poll wins the
+  // race against the pairing round trip comfortably.
+  let candidate = null
+  const deadline = Date.now() + 5000
+  while (candidate === null && Date.now() < deadline) {
+    if (joiner._activeJoin !== null) candidate = joiner._activeJoin.candidate
+    if (candidate === null) await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  t.ok(candidate !== null, 'candidate observed while the join was in flight')
+
+  await t.exception(join, 'denied join rejects')
+  t.ok(candidate.closed, 'the rejected candidate is closed, not left announcing on the DHT')
+})
+
 test('pairing: joinGroup with a different invite supersedes the stale attempt', async function (t) {
   t.plan(4)
   const tn = await makeTestnet(t)

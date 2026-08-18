@@ -295,12 +295,26 @@ issuance are creator-only, and that policy is enforced inside
 field in the operation) — a compromised or malicious member can append
 whatever `add-device`/`remove-device`/`add-invite`/`del-invite` ops it
 likes, but every honest peer's `apply()` ignores ones not authored by
-the creator, so the forged op has no effect anywhere in the group.
+the creator, so the forged op has no effect anywhere in the group. The
+two per-device operations are bound to their author the same way:
+`apply()` drops a `set-wallpaper` whose `from` isn't the verified author
+(no spoofing who a wallpaper came from) and an `applied` ack for any
+device other than the author (no acking a peer's delivery on its
+behalf, which would permanently suppress that delivery and show the
+sender a false ✓).
 Connections are gated the same way at the network layer: a Hyperswarm
-connection from a public key not on the roster is dropped before any
-replication happens, unless an invite is currently outstanding and
-unexpired (the window blind-pairing needs to hand over group keys) or
-this device hasn't booted a group yet (still pairing itself in). An
+connection from a public key not on the roster is dropped, unless an
+invite is currently outstanding and unexpired or this device hasn't
+booted a group yet (still pairing itself in). Note what that exemption
+does and does not buy: an invite-window peer keeps a *socket* — which is
+all blind-pairing needs, since it rides its own protomux channel — but
+gets no `store.replicate`, so it can read neither the view nor any
+wallpaper blob. That connection is upgraded to full replication only
+once its key actually lands on the roster, i.e. after `approve()`.
+Without that split, any outsider holding the discovery key (or a
+revoked ex-member, who still has the group's encryption key and
+possibly a blob ref) could read everything for the life of the
+invite. An
 invite is a single-use, 24-hour-expiring blind-pairing capability, and
 redeeming one is not by itself sufficient to join — a human on the
 creator's device must explicitly `approve()` (or `deny()`) the

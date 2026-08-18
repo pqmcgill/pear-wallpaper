@@ -85,6 +85,7 @@ class WallpaperCore extends ReadyResource {
       if (!this.base._interrupting) this.emit('update')
     })
     this.on('update', () => this.emit('roster-changed')) // refined in Task 10
+    this.on('roster-changed', () => this._enforceGate().catch(() => {}))
   }
 
   async createGroup() {
@@ -266,13 +267,41 @@ class WallpaperCore extends ReadyResource {
 
   _onConnection(conn) {
     const remote = b4a.toString(conn.remotePublicKey, 'hex')
-    this._connections.set(remote, conn)
-    conn.on('close', () => {
-      if (this._connections.get(remote) === conn) this._connections.delete(remote)
-      this.emit('roster-changed') // online flags changed
-    })
-    this.store.replicate(conn) // replicates the base AND blob cores (Task 7)
-    this.emit('roster-changed')
+    // A connection we (or the far end) destroy — gate rejection, revocation,
+    // or a genuine network drop — surfaces as an 'error' (e.g. ECONNRESET)
+    // on whichever side didn't initiate it. Swallow it here: 'close' is
+    // still the source of truth for connection bookkeeping below.
+    conn.on('error', () => {})
+    // Gate check is async; buffer nothing meanwhile — replication attaches only after the check.
+    this._gate(remote).then((allowed) => {
+      if (!allowed) return conn.destroy()
+      this._connections.set(remote, conn)
+      conn.on('close', () => {
+        if (this._connections.get(remote) === conn) this._connections.delete(remote)
+        this.emit('roster-changed')
+      })
+      this.store.replicate(conn) // replicates the base AND blob cores (Task 7)
+      this.emit('roster-changed')
+    }, () => conn.destroy())
+  }
+
+  // Roster gate: rostered swarm keys replicate; strangers are destroyed
+  // unless an invite is outstanding (the pairing window BlindPairing needs
+  // the wire for) or we haven't booted a base yet (still pairing ourselves).
+  async _gate(remoteSwarmKeyHex) {
+    if (this.base === null) return true // still pairing: BlindPairing needs the wire
+    for await (const node of this.base.view.createReadStream({ gte: 'device/', lt: 'device0' })) {
+      if (node.value.swarmKey === remoteSwarmKeyHex) return true
+    }
+    const invite = await this.base.view.get(k.invite)
+    return invite !== null // pairing window open: allow (blind-pairing runs, replication limited to gate re-check after approval)
+  }
+
+  async _enforceGate() {
+    if (this.base === null || !this._connections) return
+    for (const [remote, conn] of this._connections) {
+      if (!(await this._gate(remote))) conn.destroy()
+    }
   }
 
   _isOnline(swarmKeyHex) {
@@ -430,6 +459,18 @@ class WallpaperCore extends ReadyResource {
     } finally {
       pending.settle()
     }
+  }
+
+  async removeDevice(key) {
+    if (this.base === null) throw new Error('not in a group')
+    if (key === this.deviceKey) throw new Error('cannot remove self')
+    const self = await this.base.view.get(k.device(this.deviceKey))
+    if (self === null || !self.value.isCreator) throw new Error('only the creator can remove devices')
+    const record = await this.base.view.get(k.device(key))
+    if (record === null) throw new Error('unknown device')
+    await this._append(ops.removeDevice({ key }))
+    const conn = this._connections.get(record.value.swarmKey)
+    if (conn) conn.destroy()
   }
 
   async _close() {

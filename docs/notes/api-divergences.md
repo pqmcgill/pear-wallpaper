@@ -295,3 +295,47 @@ nobody calls `approve()`/`deny()`) makes `core.close()` hang forever.
   rejection independently; this is the same pattern already used
   elsewhere in the suite for promises that are deliberately not awaited
   immediately.
+
+## Task 6: gate-destroyed connections need an 'error' listener; stranger test has two gatekeepers, not one
+
+- **Brief's `_onConnection`, as given, has no `conn.on('error', ...)`
+  handler anywhere** — only `conn.on('close', ...)`. Destroying a live
+  Hyperswarm connection (`conn.destroy()`, no error arg) is graceful on
+  the *initiating* side, but the far end's `NoiseSecretStream`
+  (`@hyperswarm/secret-stream`) can surface it as an `ECONNRESET`-style
+  `'error'` event before `'close'` — reproduced deterministically (4/4
+  runs) in the brief's own `06-gating.test.js` "stranger" scenario, where
+  it crashed the process with `Error: connection reset by peer` /
+  `Emitted 'error' event on NoiseSecretStream instance`, because the
+  bare `Hyperswarm` client in the test had no listener for it and Node
+  throws on an unhandled `'error'` emission. Confirmed by instrumenting
+  the stranger's own `conn.on('error', ...)` — it fires every time the
+  gate destroys the connection.
+  **Resolution:** added `conn.on('error', () => {})` at the top of
+  `_onConnection` in `core/index.js` (before the async gate check), so
+  every connection any `WallpaperCore` instance touches — gate-rejected,
+  revoked, or a genuine network drop — can't crash the process; `'close'`
+  remains the sole source of truth for connection bookkeeping. Also added
+  the same defensive listener on the raw `Hyperswarm` "stranger" in the
+  test itself (test-authored code, not covered by the `index.js` fix).
+  The revocation test's destroy (`removeDevice`) did *not* reproduce this
+  crash in isolation — likely because that connection had been open and
+  actively replicating for a while before being cut, vs. the stranger
+  case where the gate destroys a connection within milliseconds of it
+  opening; timing right at connection-open appears to be what tips a
+  graceful close into a peer-visible reset. Not fully root-caused at the
+  UDX/DHT-transport layer; the defensive listener is the appropriate fix
+  either way since a real network fault could trigger the same path.
+- **Brief's stranger test assumes exactly one gatekeeper (`t.plan(1)`,
+  a single `'close'` listener firing once).** Reality: `pairedDuo(t)`
+  leaves *two* members' swarms joined to the group's discovery key
+  (creator and joiner), both independently discover the stranger via the
+  DHT and both independently gate it out — so the stranger observes two
+  separate connections, each destroyed. Running the brief's test verbatim
+  (after fixing the error-listener crash) produced `t.plan(1)` violations
+  (`Assertion after end`) from the second `'close'`. **Resolution:**
+  rewrote the assertion to count closes and expect exactly 2
+  (`expectedGatekeepers = 2`), documented inline in
+  `core/test/06-gating.test.js`, preserving the test's intent (every
+  rostered member's gate rejects a stranger) rather than the brief's
+  undercount.

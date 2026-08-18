@@ -126,3 +126,71 @@ swallows thrown errors?
   back to the original hand-rolled `base.on('update', check)` wait
   (with `.off()` cleanup already in place) only if it's ever absent under
   a different pinned version.
+
+## Task 5: `_onCandidate` must stay pending until approve()/deny() actually runs
+
+- **Brief assumed:** `_onCandidate` emits `'pairing-request'` and returns;
+  `approve()`/`deny()` are called later, out of band, from the event
+  listener.
+- **Reality (`blind-pairing@2.x`, `core/node_modules/blind-pairing/
+  index.js:463-483`):** `Member._addRequest(value)` does
+  `promise: this.onadd(request)`, then `await pending.promise`, and only
+  *after* that promise settles does it check `if (!pending.request.response)
+  return null` before sending anything back over the channel
+  (`BlindPairing._onpairingrequest`: `ch.messages[1].send(request.response)`).
+  Compare `reference/autopass/index.js:346-362`, where `onadd` is one
+  self-contained async function that calls `addWriter` and `candidate.confirm()`
+  itself before returning — the autopass reference never splits "decide"
+  from "the promise blind-pairing is awaiting."
+  Task 4's `_onCandidate`, unchanged, returned immediately after `emit()`
+  (a synchronous call whose async listener is not awaited) — so the onadd
+  promise resolved a couple of microtasks later, almost certainly *before*
+  `approve()`'s multi-await chain (roster lookup → `add-device` append →
+  `confirm()`) ever got to call `confirm()`/`deny()`. `Member._addRequest`
+  would see `pending.request.response` still empty, drop the pending-
+  requests map entry, and send nothing back — silently stranding the
+  joiner (`joinGroup()` would hang until superseded, no error surfaced).
+- **Resolution:** `_onCandidate` now creates a `decided` promise (resolved
+  by a `settle` function stored on the `_pending` map entry) and `await`s
+  it as the very last thing before returning. `approve()` and `deny()`
+  each call `pending.settle()` immediately after calling
+  `confirm()`/`deny()` on the candidate, so the onadd promise held by
+  `Member._addRequest` only resolves once `candidate.response` is
+  actually populated, and the reply gets sent on the very same incoming
+  request message. Verified end-to-end in
+  `core/test/05-approve.test.js`: without this fix the approve test's
+  `await joiner.joinGroup(invite)` hangs (confirmed while implementing,
+  before adding `settle()`/`await decided`); with it, it resolves.
+- **Safety checked:** a candidate that is never approved/denied (e.g. a
+  test that fires `'pairing-request'` and does nothing) leaves `_onCandidate`
+  awaiting `decided` forever, but this is a plain, timer-free `Promise` on
+  a detached per-message async handler (`BlindPairing._onpairingrequest`
+  is fire-and-forget, not awaited by `Member.close()`'s `this.pairing`/
+  `_activePoll` chain, which only tracks the separate DHT-polling path) —
+  it neither keeps the event loop alive nor blocks `close()`. Confirmed:
+  `core/test/04-pairing.test.js`'s "candidate request reaches the creator"
+  test never calls `approve()`/`deny()` and still passes cleanly in the
+  full suite.
+
+## Task 5: deny() investigation — blind-pairing DOES reach the candidate
+
+- **Investigated per the controller's Task 5 instructions:** does
+  `blind-pairing-core`'s `MemberRequest` (the object passed as `candidate`
+  to `Member`'s `onadd`) expose an explicit deny surface that reaches the
+  candidate's `'rejected'` event, so a denied joiner's `joinGroup()`
+  rejects instead of hanging until superseded?
+- **Yes.** `MemberRequest.deny({ status = 1 } = {})`
+  (`blind-pairing-core/index.js`) encodes a `ResponsePayload` with a
+  non-zero status and sends it exactly like `confirm()` does. On the
+  candidate side, `CandidateRequest.handleResponse()` →
+  `_openResponse()` sees `status !== 0`, throws `PAIRING_REJECTED()`,
+  which `handleResponse`'s catch turns into a `'rejected'` event on
+  `candidate.request` — the same surface Task 4 already wired in
+  `core/lib/pairer.js` (`candidate.request.on('rejected', (err) =>
+  reject(err))`).
+- **Resolution:** `deny()` in `core/index.js` calls `pending.candidate.deny()`
+  before deleting the pending entry, burning the invite, and settling the
+  awaiting `_onCandidate` (see the entry above). `core/test/05-approve.test.js`
+  asserts `await t.exception(joiner.joinGroup(invite), ...)` instead of
+  the brief's `joinGroupNeverResolves` helper — the denied joiner's
+  `joinGroup()` promise genuinely rejects. Verified in the full suite.

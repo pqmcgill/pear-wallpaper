@@ -311,8 +311,22 @@ class WallpaperCore extends ReadyResource {
     if (!HEX64.test(key) || !HEX64.test(swarmKey)) return
     if (typeof name !== 'string' || name.length < 1 || name.length > 64) return
 
-    this._pending.set(key, { candidate, key, swarmKey, name })
+    // A second candidate on the same invite must not silently replace the
+    // entry the human was already shown via 'pairing-request'.
+    if (this._pending.has(key)) return
+
+    // blind-pairing's Member._addRequest awaits this handler's returned
+    // promise and, once it settles, checks candidate.response to decide
+    // whether to send anything back at all — so this must stay pending
+    // until approve()/deny() has actually called confirm()/deny() on the
+    // candidate. Resolving early (e.g. right after emit()) would let
+    // _addRequest see a still-empty response and drop the reply, silently
+    // stranding the joiner. approve()/deny() call `settle()` once done.
+    let settle
+    const decided = new Promise((resolve) => { settle = resolve })
+    this._pending.set(key, { candidate, key, swarmKey, name, settle })
     this.emit('pairing-request', { candidateKey: key, name })
+    await decided
   }
 
   async createInvite() {
@@ -337,6 +351,46 @@ class WallpaperCore extends ReadyResource {
     }))
     if (this.member) await this.member.flushed()
     return z32.encode(invite)
+  }
+
+  async approve(candidateKey) {
+    const pending = this._pending.get(candidateKey)
+    if (!pending) throw new Error('no pending candidate with that key')
+    const self = await this.base.view.get(k.device(this.deviceKey))
+    if (self === null || !self.value.isCreator) throw new Error('only the creator can approve')
+
+    await this._append(ops.addDevice({
+      key: pending.key,
+      swarmKey: pending.swarmKey,
+      name: pending.name
+    }))
+    // The stored invite record has no `additional` field (createInvite is
+    // never called with `data`) — pass it explicitly as null rather than
+    // reference `inv.value.additional`, which doesn't exist. See Task 4/5
+    // divergence notes.
+    pending.candidate.confirm({
+      key: this.base.key,
+      encryptionKey: this.base.encryptionKey,
+      additional: null
+    })
+    this._pending.delete(candidateKey)
+    await this._append(ops.delInvite()) // single-use: an invite admits one device
+    pending.settle() // let the awaiting _onCandidate return, so blind-pairing sends the reply
+  }
+
+  async deny(candidateKey) {
+    const pending = this._pending.get(candidateKey)
+    if (!pending) throw new Error('no pending candidate with that key')
+    // Investigated (Task 5): blind-pairing-core's MemberRequest exposes an
+    // explicit deny() that encodes and sends a PAIRING_REJECTED response,
+    // which the candidate's CandidateRequest.handleResponse() turns into a
+    // 'rejected' event on candidate.request — already wired in pairer.js
+    // to reject joinGroup()'s promise. So a denied joiner's joinGroup call
+    // rejects instead of hanging until superseded.
+    pending.candidate.deny()
+    this._pending.delete(candidateKey)
+    await this._append(ops.delInvite()) // burn it: deny means this invite is compromised/unwanted
+    pending.settle() // let the awaiting _onCandidate return, so blind-pairing sends the reply
   }
 
   async _close() {

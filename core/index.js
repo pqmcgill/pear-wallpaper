@@ -507,12 +507,16 @@ class WallpaperCore extends ReadyResource {
   // the wire. Confirmed empirically: calling flush()+update() immediately
   // after a remote append reliably misses it, while waiting on this
   // instance's own 'update' event (already wired in _boot, fired whenever
-  // autobase ingests newly-replicated data) reliably catches it within
-  // ~1s. So sync() uses `_settle()` below instead of a single bare
-  // `update()` call — still purely event-driven (no fixed sleep): it keeps
-  // resetting a short idle timer every time an 'update' fires, and returns
-  // once nothing new has arrived for `idleMs`, bounded overall by the
-  // same timeoutMs race as the rest of sync().
+  // autobase ingests newly-replicated data) reliably catches it. So sync()
+  // uses `_settle()` below instead of a single bare `update()` call —
+  // still purely event-driven (no fixed sleep).
+  //
+  // sync() must resolve, never reject (contract: "resolves when settled
+  // or on timeout"). The work IIFE is `.catch(noop)`'d before racing it
+  // against the timeout: `_settle`'s base.update() can rethrow (e.g.
+  // SESSION_CLOSED under a concurrent close), and _checkIncoming's bounded
+  // blobs.get rejects in the ordinary no-peer-has-the-blob-yet case — any
+  // of those must not surface as a sync() rejection to the caller.
   async sync({ timeoutMs = 30000 } = {}) {
     if (this.opened === false) await this.ready()
     if (this.base === null) return
@@ -520,22 +524,59 @@ class WallpaperCore extends ReadyResource {
     const timeout = new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs) })
     const work = (async () => {
       await this.swarm.flush()          // announced + pending connections done
-      await this._settle()              // ingest whatever connected peers have (event-driven; see divergence note)
+      await this._settle(timeoutMs)     // ingest whatever connected peers have (event-driven; see divergence note)
       await this._relayBlobs()
       await this._checkIncoming()
-    })()
+    })().catch(noop)
     await Promise.race([work, timeout])
     clearTimeout(timer)
   }
 
-  // Ingest replicated data as it lands: run an immediate base.update() for
-  // whatever's already local, then wait for a quiet window on this
-  // instance's 'update' event (reset on every fresh update) so data still
-  // in flight over an already-open connection gets a real chance to land
-  // before sync() moves on to relaying/materializing.
-  async _settle(idleMs = 250) {
+  // Ingest replicated data as it lands. Two phases:
+  //
+  // 1. First-update floor: swarm.flush() only guarantees sockets are open —
+  //    the roster gate attaches store.replicate() to a connection strictly
+  //    AFTER an async gate scan that runs past flush(), so at the moment
+  //    _settle starts, a hypercore request for a peer's new data may not
+  //    even be in flight yet. If we have at least one gated connection,
+  //    wait for the FIRST 'update' event (proof that replication for
+  //    *something* landed), bounded by min(timeoutMs, 5000) so a
+  //    genuinely-quiet peer (nothing new to send) doesn't wedge sync().
+  //    With zero connections nothing can arrive over the wire at all, so
+  //    this phase is skipped entirely.
+  // 2. Quiet window: once satisfied (or skipped), wait idleMs with no
+  //    further 'update' activity (resetting on every fresh event) so a
+  //    burst of trailing updates gets folded in before sync() moves on.
+  async _settle(timeoutMs, idleMs = 250) {
     await this.base.update()
-    await new Promise((resolve) => {
+    if (this._connections && this._connections.size > 0) {
+      await this._waitForUpdate(Math.min(timeoutMs, 5000))
+    }
+    await this._quietWindow(idleMs)
+    await this.base.update()
+  }
+
+  // Resolve on the next 'update' event, or after ms — whichever comes
+  // first. Always removes its own listener, so a peer that never sends
+  // anything doesn't leak a handler past the timeout.
+  _waitForUpdate(ms) {
+    return new Promise((resolve) => {
+      let timer
+      const done = () => {
+        clearTimeout(timer)
+        this.off('update', onUpdate)
+        resolve()
+      }
+      const onUpdate = () => done()
+      timer = setTimeout(done, ms)
+      this.on('update', onUpdate)
+    })
+  }
+
+  // Resolve once idleMs has elapsed with no 'update' event (the timer is
+  // reset on every fresh event).
+  _quietWindow(idleMs) {
+    return new Promise((resolve) => {
       const done = () => {
         this.off('update', onUpdate)
         resolve()
@@ -547,7 +588,6 @@ class WallpaperCore extends ReadyResource {
       }
       this.on('update', onUpdate)
     })
-    await this.base.update()
   }
 
   async _startSwarm() {

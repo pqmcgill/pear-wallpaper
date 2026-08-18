@@ -65,11 +65,22 @@ async function trio(t) {
   }
   const a = await mk('desktop')
   await a.createGroup()
-  a.on('pairing-request', ({ candidateKey }) => a.approve(candidateKey))
+  a.on('pairing-request', ({ candidateKey }) => a.approve(candidateKey).catch(() => {}))
   const b = await mk('laptop')
   await b.joinGroup(await a.createInvite())
   const c = await mk('phone')
   await c.joinGroup(await a.createInvite())
+  // Tests close members individually and in various orders (e.g. the
+  // Task 11 offline-relay scenario closes c, then a, then reopens c as
+  // c2) — mirror pairedDuo's teardown so a run that doesn't fully close
+  // everything itself still gets cleaned up. ReadyResource#close() is
+  // idempotent, but .catch() guards against a close that races/errors
+  // (e.g. a candidate already mid-teardown) from failing the teardown.
+  t.teardown(async () => {
+    await a.close().catch(() => {})
+    await b.close().catch(() => {})
+    await c.close().catch(() => {})
+  })
   return { a, b, c, tn }
 }
 

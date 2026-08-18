@@ -44,6 +44,8 @@ class WallpaperCore extends ReadyResource {
     this._applyBusy = false
     this._lastEmitted = null
     this._materializing = new Map() // send id -> in-flight _materialize promise
+    this._lastDevices = null // Task 10: cached device-row keys, for diffing on update
+    this._lastAcks = null // Task 10: cached ack-row keys, for diffing on update
   }
 
   get deviceKey() {
@@ -96,7 +98,7 @@ class WallpaperCore extends ReadyResource {
     this.base.on('update', () => {
       if (!this.base._interrupting) this.emit('update')
     })
-    this.on('update', () => this.emit('roster-changed')) // refined in Task 10
+    this.on('update', () => { this._checkRosterAndAcks().catch(noop) })
     this.on('roster-changed', () => this._enforceGate().catch(() => {}))
     this.on('update', () => { this._checkIncoming().catch(noop) })
   }
@@ -299,9 +301,88 @@ class WallpaperCore extends ReadyResource {
     return out
   }
 
+  async markApplied(id) {
+    if (this.base === null) throw new Error('not in a group')
+    const send = await this.base.view.get(k.send(id))
+    if (send === null) throw new Error('unknown send')
+    if (!send.value.targets.includes(this.deviceKey)) throw new Error('not a target of this send')
+    await this._append(ops.applied({ sendId: id, device: this.deviceKey }))
+  }
+
   async _targetStatus(send, targetKey) {
     const ack = await this.base.view.get(k.ack(send.id, targetKey))
-    return ack !== null ? 'delivered' : 'pending' // 'superseded' added in Task 10
+    if (ack !== null) return 'delivered'
+    // superseded: the target applied a NEWER send — this one will never apply
+    for await (const node of this.base.view.createReadStream({ gte: 'send/', lt: 'send0' })) {
+      const other = node.value
+      if (other.seq <= send.seq || !other.targets.includes(targetKey)) continue
+      if ((await this.base.view.get(k.ack(other.id, targetKey))) !== null) return 'superseded'
+    }
+    return 'pending'
+  }
+
+  async listReceived({ limit = 10 } = {}) {
+    if (this.base === null) return []
+    const out = []
+    for await (const node of this.base.view.createReadStream({ gte: 'send/', lt: 'send0' })) {
+      const s = node.value
+      if (!s.targets.includes(this.deviceKey)) continue
+      const ack = await this.base.view.get(k.ack(s.id, this.deviceKey))
+      if (ack === null) continue
+      out.push({
+        id: s.id, fromKey: s.from, meta: s.meta,
+        filePath: path.join(this.storageDir, 'received', s.id + s.meta.ext),
+        appliedAt: ack.value.appliedAt
+      })
+    }
+    out.sort((a, b) => b.appliedAt - a.appliedAt)
+    return out.slice(0, limit)
+  }
+
+  // Scoped events (Task 10): replaces the Task 3 blanket 'roster-changed'
+  // re-emit on every 'update'. Two quick key-only scans (device/ and ack/),
+  // diffed against the previous run's cached key lists. 'roster-changed'
+  // fires only when the device-row set actually changed (online-flag
+  // changes still emit it separately, from _onConnection). 'send-updated'
+  // fires once per NEW ack row whose send this device authored — so a
+  // sender learns exactly when one of its own sends gets acked, without
+  // re-emitting for acks already accounted for on a prior run. The first
+  // run after boot only seeds the caches: emitting for pre-existing acks
+  // (e.g. replayed history on startup) would be spurious noise, not news.
+  async _checkRosterAndAcks() {
+    if (this.base === null) return
+    const devices = []
+    for await (const node of this.base.view.createReadStream({ gte: 'device/', lt: 'device0' })) {
+      devices.push(node.key)
+    }
+    const acks = []
+    for await (const node of this.base.view.createReadStream({ gte: 'ack/', lt: 'ack0' })) {
+      acks.push(node.key)
+    }
+
+    if (this._lastDevices === null) {
+      // First run: seed the baseline, emit nothing yet.
+      this._lastDevices = devices
+      this._lastAcks = acks
+      return
+    }
+
+    const devicesChanged = devices.length !== this._lastDevices.length ||
+      devices.some((key, i) => key !== this._lastDevices[i])
+    if (devicesChanged) this.emit('roster-changed')
+
+    const previousAcks = new Set(this._lastAcks)
+    const newAckKeys = acks.filter((key) => !previousAcks.has(key))
+    for (const ackKey of newAckKeys) {
+      const sendId = ackKey.slice('ack/'.length, ackKey.lastIndexOf('/'))
+      const send = await this.base.view.get(k.send(sendId))
+      if (send !== null && send.value.from === this.deviceKey) {
+        this.emit('send-updated', { id: sendId })
+      }
+    }
+
+    this._lastDevices = devices
+    this._lastAcks = acks
   }
 
   // Called on every base update (wired in _boot).

@@ -1897,14 +1897,24 @@ test('offline delivery: relay carries a send after the sender leaves', async fun
     const timeout = new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs) })
     const work = (async () => {
       await this.swarm.flush()          // announced + pending connections done
-      await this.base.update()          // ingest whatever connected peers have
+      await this._settle(timeoutMs)     // see as-built note below
       await this._relayBlobs()
       await this._checkIncoming()
-    })()
+    })().catch(noop)                    // sync() must never reject (as-built fix)
     await Promise.race([work, timeout])
     clearTimeout(timer)
   }
 ```
+
+**As-built note (Task 11):** autobase 7.x's `base.update()` only re-linearizes
+*already-local* data — it does not wait for network replication (verified at
+source; the sole network-waiting path is gated behind an option we don't use).
+`_settle(timeoutMs)` replaces it with a two-phase wait: `base.update()`, then —
+if any gated connection exists — wait for the FIRST `'update'` event under
+`min(timeoutMs, 5000)` (replication starts strictly after flush because the
+roster gate is async, so a bare quiet-window would miss slow links
+systematically), then a 250ms quiet window, then a final `base.update()`.
+Both waits clean their listeners on every exit path.
 
 Also call `this._relayBlobs().catch(noop)` from the `update` handler in `_boot` (alongside `_checkIncoming`), so long-running desktops relay continuously, not only during explicit sync.
 

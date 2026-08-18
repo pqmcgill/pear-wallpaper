@@ -162,9 +162,65 @@ management (deferred with pruning), no generic `update` event.
   it — presence metadata only, no group data. Accepted for personal
   use.
 
+> **Correction (core-v0.1.0):** the first two properties above were
+> found NOT to hold as originally built and were fixed in code — see
+> "As-built deltas" below. They hold as of core-v0.1.0.
+
+#### As-built deltas from §3.1 (Plan 1 shipped, core-v0.1.0)
+
+The locked §3.1 above is the design record; the surface evolved during
+implementation for the reasons below. **The authoritative contract is
+now `core/README.md`** — where it and §3.1 disagree, the README wins.
+
+- **`markApplied`, `sync`, `pendingWallpaper`, `listReceived`** — all
+  built as specified. The surface grew from 15 to a few more members;
+  none were cut.
+- **Per-target status gained `'superseded'`** (approved during design
+  review): a send outrun by a newer one to the same target reads
+  `superseded`, not a permanent `pending`. Derived at read time, never
+  stored.
+- **`'update'` event now exists and is public.** §3.1 listed "no
+  generic `update` event" as a deliberate cut — that cut is **reversed**:
+  it is the load-bearing signal the receive pipeline, ack-diffing, and
+  `sync`'s settle logic all hang on, and shells may use it.
+- **`'error-joining'` event** (payload-less this milestone) — fires when
+  a restart-resumed join fails; recovery is a fresh invite.
+- **Constructor takes `bootstrap`** (test-only DHT override) and exposes
+  readable `deviceName` / `storageDir`.
+- **`createInvite()` is idempotent while an invite is live** (returns the
+  same string) and **regenerates an expired one** (burns it, mints
+  fresh) — so an abandoned invite is never re-served dead.
+- **`joinGroup()` rejection taxonomy** shells must handle:
+  `PAIRING_REJECTED` (creator denied), `INVITE_USED`, `INVITE_EXPIRED`,
+  `'superseded by a newer invite'`, `'closed'`.
+- **Invite TTL is fixed at 24h.**
+- **`'roster-changed'` fires wider than implied** — on any gate-allowed
+  connection open/close, including a pairing candidate during an open
+  invite window.
+- **`ready()` no longer unconditionally joins the swarm** — it starts
+  networking only if a group already exists (or on the resume path).
+
+Two §3.1 security claims were **found false during the final review and
+fixed in code** (not merely reworded):
+
+- The Noise-handshake gate does **not** drop non-rostered peers "before
+  replication" during an open invite window — the original gate handed
+  full replication to any peer that knew the discovery key. Fixed:
+  `store.replicate` is now gated on roster membership (`_isRostered`),
+  not on the pairing-window exemption; pairing rides blind-pairing's own
+  channel without replication, and a connection is upgraded to
+  replicating only once its key is on the roster. The revocation
+  guarantee now holds through invite windows.
+- Creator-only authorship enforcement in `apply` originally covered only
+  roster/invite ops; **send and ack ops were unbound**, letting any
+  member forge delivery receipts. Fixed: `apply` now binds
+  `set-wallpaper.from` and `applied.device` to the verified author.
+
 **Contract: shells never touch hypercore-family APIs directly.** They
-speak only the core API. All platforms therefore exercise identical
-sync code, and the core is testable headless.
+speak only the core API. (As-built caveat: `core.base/blobs/meta/swarm/
+member` are reachable but internal — treat them as private; Plan 2 may
+underscore them.) All platforms therefore exercise identical sync code,
+and the core is testable headless.
 
 ### 3.2 `desktop/` — Pear app (macOS + Windows)
 
@@ -274,6 +330,11 @@ platform setter → append `applied` **only after the setter succeeds**
 
 ## 8. Open items
 
+- Key custody hardening (post-MVP): optional `primaryKey` constructor
+  option so shells can source the corestore seed from the OS keychain
+  (device-local, non-syncing) instead of disk; recommended creator
+  posture is full-disk encryption + OS keychain. Deliberately not a
+  cloud password manager — device identities must not leave the device.
 - Always-on relay peer: optional, zero-redesign addition later.
 - Blob pruning: add if storage ever matters.
 - iOS sender-only mode / Shortcuts receiver: possible future phase.

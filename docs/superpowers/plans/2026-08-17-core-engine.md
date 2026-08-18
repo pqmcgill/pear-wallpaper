@@ -56,6 +56,7 @@ View schema (Hyperbee keys → JSON values):
 | Key | Value | Written by op |
 |-----|-------|---------------|
 | `device/<writerKeyHex>` | `{ key, swarmKey, name, isCreator }` | `add-device` (deleted by `remove-device`) |
+| `creator` | `{ key }` — set by the first add-device; roster ops from any other author are ignored in apply | `add-device` (bootstrap only) |
 | `invite` | `{ id, invite, publicKey, expires }` (hex fields) | `add-invite` / `del-invite` |
 | `send/<id>` | `{ id, seq, from, targets:[hex], blob:{core,id}, meta, sentAt }` | `set-wallpaper` |
 | `send-seq` | `{ n }` — monotonic counter assigned in apply | `set-wallpaper` |
@@ -199,7 +200,8 @@ test('two swarms exchange a hypercore block over a local testnet', async functio
   swarmA.on('connection', (conn) => storeA.replicate(conn))
   swarmB.on('connection', (conn) => storeB.replicate(conn))
 
-  swarmA.join(coreA.discoveryKey)
+  const discovery = swarmA.join(coreA.discoveryKey)
+  await discovery.flushed() // A's announce must reach the DHT before B looks up
   swarmB.join(coreA.discoveryKey)
 
   const coreB = storeB.get(coreA.key) // capability: knowing the key IS the read grant
@@ -438,6 +440,7 @@ test('createGroup: group survives reopen', async function (t) {
   const devices = await core2.listDevices()
   t.is(devices.length, 1)
   t.is(devices[0].name, 'alpha')
+  t.is(devices[0].key, core2.deviceKey, 'roster key IS the reopened local-writer key')
   await core2.close()
 })
 
@@ -462,8 +465,8 @@ const crypto = require('hypercore-crypto')
 const b4a = require('b4a')
 
 module.exports = {
-  addDevice({ key, swarmKey, name, isCreator = false }) {
-    return { type: 'add-device', key, swarmKey, name, isCreator }
+  addDevice({ key, swarmKey, name }) {
+    return { type: 'add-device', key, swarmKey, name } // isCreator is DERIVED in apply, never carried in the op
   },
   removeDevice({ key }) {
     return { type: 'remove-device', key }
@@ -499,6 +502,7 @@ const b4a = require('b4a')
 // View keys. One module owns the key layout so scans stay consistent.
 const k = {
   device: (hex) => `device/${hex}`,
+  creator: 'creator',
   invite: 'invite',
   send: (id) => `send/${id}`,
   sendSeq: 'send-seq',
@@ -508,21 +512,43 @@ const k = {
 // The apply function: consumes ordered log nodes, mutates the view.
 // MUST be deterministic — every member runs this over the same op
 // sequence and must land on byte-identical views.
+//
+// ROSTER POLICY (creator-only, enforced HERE): apply is the group's
+// constitution — a compromised member can append any op it likes, but
+// every honest peer's apply ignores roster ops not authored by the
+// creator. The first add-device ever applied (createGroup's self-add)
+// establishes the creator. `node.from.key` is the authoring writer's
+// core key in autobase 7.x; if the pinned version names it differently,
+// check the autobase source and log the divergence.
 async function apply(nodes, view, base) {
   for (const node of nodes) {
     const op = node.value
+    const author = b4a.toString(node.from.key, 'hex')
     switch (op.type) {
       case 'add-device': {
+        const creator = await view.get(k.creator)
+        if (creator === null) {
+          // bootstrap: the very first add-device defines the creator —
+          // bound to the VERIFIED author, never the op's claimed key
+          if (op.key !== author) break
+          await view.put(k.creator, { key: author })
+        } else if (author !== creator.value.key) {
+          break // forged roster op from a non-creator: ignored by every honest peer
+        }
+        const creatorKey = creator === null ? author : creator.value.key
         await view.put(k.device(op.key), {
           key: op.key,
           swarmKey: op.swarmKey,
           name: op.name,
-          isCreator: op.isCreator === true
+          isCreator: op.key === creatorKey // derived, never self-reported
         })
         await base.addWriter(b4a.from(op.key, 'hex'))
         break
       }
       case 'remove-device': {
+        const creator = await view.get(k.creator)
+        if (creator === null || author !== creator.value.key) break // creator-only
+        if (op.key === creator.value.key) break // the creator cannot be removed
         await view.del(k.device(op.key))
         await base.removeWriter(b4a.from(op.key, 'hex'))
         break
@@ -594,8 +620,7 @@ Add requires: `Hyperbee`, `Hyperswarm`, `{ apply, k }` from `./lib/apply.js`, `o
     await this._append(ops.addDevice({
       key: this.deviceKey,
       swarmKey: await this._swarmKeyHex(),
-      name: this.deviceName,
-      isCreator: true
+      name: this.deviceName
     }))
     await this.meta.put('group', {
       key: b4a.toString(this.base.key, 'hex'),
@@ -660,6 +685,7 @@ git add -A && git commit -m "feat(core): createGroup, autobase log, roster view"
 **Files:**
 - Create: `core/lib/pairer.js`
 - Modify: `core/index.js` (`_startSwarm`, `createInvite`, `joinGroup`, `'pairing-request'`)
+- Modify: `core/lib/apply.js` (creator-only guards on invite ops — ruled during design review)
 - Test: `core/test/04-pairing.test.js`
 
 **Interfaces:**
@@ -718,6 +744,25 @@ test('pairing: createInvite is idempotent until consumed', async function (t) {
 ```
 
 - [ ] **Step 2: Run to verify failure** — FAIL: `createInvite is not a function`.
+
+- [ ] **Step 3a: Extend the creator-only policy to invite ops in `core/lib/apply.js`** — a forged invite record is a social-engineering path (an attacker-planted invite makes a routine-looking pairing request). Guard both cases:
+
+```js
+      case 'add-invite': {
+        const creator = await view.get(k.creator)
+        if (creator === null || author !== creator.value.key) break // creator-only, like all authority ops
+        await view.put(k.invite, {
+          id: op.id, invite: op.invite, publicKey: op.publicKey, expires: op.expires
+        })
+        break
+      }
+      case 'del-invite': {
+        const creator = await view.get(k.creator)
+        if (creator === null || author !== creator.value.key) break // creator-only
+        await view.del(k.invite)
+        break
+      }
+```
 
 - [ ] **Step 3: Implement `_startSwarm` + `createInvite` in `index.js`** (member side; modeled on `reference/autopass/index.js:331-373`, with the human gate replacing auto-admit)
 
@@ -1008,8 +1053,7 @@ Use `t.plan(3)` on the deny test so it ends after the three assertions inside th
     await this._append(ops.addDevice({
       key: pending.key,
       swarmKey: pending.swarmKey,
-      name: pending.name,
-      isCreator: false
+      name: pending.name
     }))
     const inv = await this.base.view.get(k.invite)
     pending.candidate.confirm({
@@ -1104,6 +1148,37 @@ test('revocation: removed device loses connectivity and leaves the roster', asyn
   await eventFlush()
   t.is(creator._connections.has(await joiner._swarmKeyHex()), false, 'connection torn down')
 })
+
+test('policy: a forged roster op from a non-creator is ignored by apply', async function (t) {
+  const { creator, joiner } = await pairedDuo(t)
+
+  await t.exception(() => joiner.removeDevice(creator.deviceKey), /only the creator/)
+
+  // Bypass the method entirely — append the raw op, as a compromised
+  // device would. Every honest peer's apply must ignore it.
+  const ops = require('../lib/ops.js')
+  await joiner._append(ops.removeDevice({ key: creator.deviceKey }))
+
+  await until(creator, 'update', async () =>
+    (await creator.base.view.get(`device/${joiner.deviceKey}`)) !== null
+  )
+  t.is((await creator.listDevices()).length, 2, 'creator still rostered on creator side')
+  t.is((await joiner.listDevices()).length, 2, 'forged op ignored even on the forger')
+
+  // Forged invite ops are equally inert (creator-only, ruled in design review)
+  const BlindPairing = require('blind-pairing')
+  const b4a = require('b4a')
+  const forged = BlindPairing.createInvite(joiner.base.key)
+  await joiner._append(ops.addInvite({
+    id: b4a.toString(forged.id, 'hex'),
+    invite: b4a.toString(forged.invite, 'hex'),
+    publicKey: b4a.toString(forged.publicKey, 'hex'),
+    expires: forged.expires
+  }))
+  // Assert on the forger's own view: apply is deterministic and identical on
+  // every peer, so the op being ignored locally proves it is ignored everywhere.
+  t.is(await joiner.base.view.get('invite'), null, 'forged invite never lands in the view')
+})
 ```
 
 - [ ] **Step 2: Run to verify failure** — the stranger test fails (connection stays open) and `removeDevice` is not a function.
@@ -1116,6 +1191,7 @@ test('revocation: removed device loses connectivity and leaves the roster', asyn
     // Gate check is async; buffer nothing meanwhile — replication attaches only after the check.
     this._gate(remote).then((allowed) => {
       if (!allowed) return conn.destroy()
+      if (conn.destroyed) return // closed during the async gate: never store a phantom
       this._connections.set(remote, conn)
       conn.on('close', () => {
         if (this._connections.get(remote) === conn) this._connections.delete(remote)
@@ -1132,12 +1208,17 @@ test('revocation: removed device loses connectivity and leaves the roster', asyn
       if (node.value.swarmKey === remoteSwarmKeyHex) return true
     }
     const invite = await this.base.view.get(k.invite)
-    return invite !== null // pairing window open: allow (blind-pairing runs, replication limited to gate re-check after approval)
+    // Pairing window open: allow. NOTE the real exposure — an invite-window
+    // connection gets full store.replicate; the window must therefore be
+    // bounded by expiry or an abandoned invite silently reverses revocation.
+    return invite !== null && (invite.value.expires === 0 || Date.now() <= invite.value.expires)
   }
 
   async removeDevice(key) {
     if (this.base === null) throw new Error('not in a group')
     if (key === this.deviceKey) throw new Error('cannot remove self')
+    const self = await this.base.view.get(k.device(this.deviceKey))
+    if (self === null || !self.value.isCreator) throw new Error('only the creator can remove devices')
     const record = await this.base.view.get(k.device(key))
     if (record === null) throw new Error('unknown device')
     await this._append(ops.removeDevice({ key }))
@@ -1145,6 +1226,8 @@ test('revocation: removed device loses connectivity and leaves the roster', asyn
     if (conn) conn.destroy()
   }
 ```
+
+(The method check gives non-creators a clear error; the *binding* enforcement is apply's authorship check — the method is UX, apply is law.)
 
 Also re-run the gate when the roster changes (a device removed while connected must be cut): in `_boot()` after the update listener, add:
 
@@ -1430,6 +1513,7 @@ git add -A && git commit -m "feat(core): sendWallpaper with validation; listSend
 
 **Files:**
 - Modify: `core/index.js` (`_checkIncoming`, `pendingWallpaper`, `'wallpaper'` event, received-file writing)
+- Modify: `core/lib/blobs.js` — `get(ref, { timeoutMs = 0 } = {})` forwards `{ timeout: timeoutMs }` to hyperblobs (0 = wait forever, unchanged default). Ruled after Task 7 review: an unfetchable blob (revoked sender, offline peer, garbage ref) must not wedge the receive/relay loops — callers here and in Task 11 pass a bound (30s) and treat rejection as pending-retry (spec §6).
 - Test: `core/test/09-receive.test.js`
 
 **Interfaces:**
@@ -1525,7 +1609,21 @@ const path = require('path')
     return newest
   }
 
-  async _materialize(entry) {
+  // As-built note (Task 9 fix): _checkIncoming and pendingWallpaper can race
+  // into _materialize for the same id (same .part path → deterministic ENOENT).
+  // An in-flight dedupe map shares one fetch+write per id; .finally cleanup on
+  // success AND failure so a timed-out fetch never poisons retry-next-update.
+  _materialize(entry) {
+    const existing = this._materializing.get(entry.id)
+    if (existing) return existing
+    const promise = this._materializeNow(entry).finally(() => {
+      this._materializing.delete(entry.id)
+    })
+    this._materializing.set(entry.id, promise)
+    return promise
+  }
+
+  async _materializeNow(entry) {
     const dir = path.join(this.storageDir, 'received')
     await fs.promises.mkdir(dir, { recursive: true })
     const filePath = path.join(dir, entry.id + entry.meta.ext)
@@ -1533,7 +1631,7 @@ const path = require('path')
       await fs.promises.access(filePath)
       return filePath // already on disk
     } catch {}
-    const buffer = await this.blobs.get(entry.blob)
+    const buffer = await this.blobs.get(entry.blob, { timeoutMs: 30000 }) // bounded: rejection = stays pending, retried next sync
     const tmpPath = filePath + '.part'
     await fs.promises.writeFile(tmpPath, buffer)
     await fs.promises.rename(tmpPath, filePath) // atomic: shells never see partial files
@@ -1788,7 +1886,7 @@ test('offline delivery: relay carries a send after the sender leaves', async fun
         if ((await this.base.view.get(k.ack(s.id, target))) === null) done = false
       }
       if (done) continue
-      await this.blobs.get(s.blob).catch(() => {}) // best effort; retried next sync
+      await this.blobs.get(s.blob, { timeoutMs: 30000 }).catch(() => {}) // bounded best effort; retried next sync
     }
   }
 
@@ -1799,14 +1897,24 @@ test('offline delivery: relay carries a send after the sender leaves', async fun
     const timeout = new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs) })
     const work = (async () => {
       await this.swarm.flush()          // announced + pending connections done
-      await this.base.update()          // ingest whatever connected peers have
+      await this._settle(timeoutMs)     // see as-built note below
       await this._relayBlobs()
       await this._checkIncoming()
-    })()
+    })().catch(noop)                    // sync() must never reject (as-built fix)
     await Promise.race([work, timeout])
     clearTimeout(timer)
   }
 ```
+
+**As-built note (Task 11):** autobase 7.x's `base.update()` only re-linearizes
+*already-local* data — it does not wait for network replication (verified at
+source; the sole network-waiting path is gated behind an option we don't use).
+`_settle(timeoutMs)` replaces it with a two-phase wait: `base.update()`, then —
+if any gated connection exists — wait for the FIRST `'update'` event under
+`min(timeoutMs, 5000)` (replication starts strictly after flush because the
+roster gate is async, so a bare quiet-window would miss slow links
+systematically), then a 250ms quiet window, then a final `base.update()`.
+Both waits clean their listeners on every exit path.
 
 Also call `this._relayBlobs().catch(noop)` from the `update` handler in `_boot` (alongside `_checkIncoming`), so long-running desktops relay continuously, not only during explicit sync.
 

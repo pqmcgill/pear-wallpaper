@@ -1,0 +1,15 @@
+# Journal
+- 2026-08-17 Task 1: scaffold + smoke test green (corestore/hyperswarm/testnet working)
+- 2026-08-17 Task 2: WallpaperCore lifecycle + identity + local meta (identity = autobase local-writer key)
+- 2026-08-17 Task 3: createGroup + autobase log + roster view (creator-only roster policy enforced in apply)
+- 2026-08-17 Task 4: invites + candidate pairing (creator-only invite ops; explicit approval gate — no auto-admit)
+- 2026-08-17 Task 4 review addendum: 2 fix rounds — userData validation (crash fix), creator-gated _onCandidate, supersede semantics with settled promises, 24h invite expiry, candidate-side 'rejected' event wired (blind-pairing DOES surface dead invites, one level below its swallowing poll loop)
+- 2026-08-17 Task 5: approve/deny complete pairing; rosters converge end-to-end
+- 2026-08-17 Task 6: roster-gated connections + revocation (gate = who's on the wire; apply = what ops count)
+- 2026-08-17 Task 7: per-device hyperblobs store; cross-peer fetch by capability over gated connections
+- 2026-08-18 Task 8: sendWallpaper (validate → blob → op → resolve immediately); listSends pending status
+- 2026-08-18 Task 9: receive pipeline (newest-unapplied detection, bounded blob fetch, atomic file materialization, wallpaper event + pendingWallpaper)
+- 2026-08-18 Task 10: applied acks close the loop (delivered/superseded status, send-updated events, received history)
+- 2026-08-18 Task 11: bounded sync + blob relaying; offline delivery via relay proven (sender-offline scenario)
+- 2026-08-18 Task 12: scenario matrix green (multi-target, full-restart, revocation-blocks-send); API README written; core-v0.1.0
+- 2026-08-18 FINAL whole-branch review (opus): 4 Critical (3 proven security holes) + 8 Important. Fixed C1–C4 + I1–I3 on-branch in one wave (0b512ee), re-reviewed clean, 45/45 tests. Tag core-v0.1.0 re-pointed to 0b512ee. Spec §3.1 as-built deltas folded in. I4–I8 ruled to Plan 2.

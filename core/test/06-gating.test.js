@@ -26,6 +26,39 @@ test('gate: a stranger on the topic gets its connection destroyed', async functi
   t.is(closed, expectedGatekeepers, 'creator and joiner both dropped the stranger')
 })
 
+test('gate: an abandoned invite past its expiry no longer opens the gate', async function (t) {
+  const { creator, tn } = await pairedDuo(t)
+
+  // A fresh, unconsumed invite — nobody ever redeemed or burned it — then
+  // artificially aged into the past via a creator-authored add-invite op
+  // (apply accepts it: same id/invite/publicKey, only expires changes).
+  await creator.createInvite()
+  const before = await creator.base.view.get('invite')
+  const ops = require('../lib/ops.js')
+  await creator._append(ops.addInvite({
+    id: before.value.id,
+    invite: before.value.invite,
+    publicKey: before.value.publicKey,
+    expires: Date.now() - 1000
+  }))
+  await until(creator, 'update', async () => {
+    const inv = await creator.base.view.get('invite')
+    return inv !== null && inv.value.expires < Date.now()
+  })
+
+  let closed = false
+  const stranger = new Hyperswarm({ bootstrap: tn.bootstrap })
+  t.teardown(() => stranger.destroy())
+  stranger.on('connection', (conn) => {
+    conn.on('error', () => {})
+    conn.on('close', () => { closed = true })
+  })
+  stranger.join(creator.base.discoveryKey)
+
+  await until(stranger, 'connection', () => closed)
+  t.ok(closed, 'gate closed despite an invite row existing, because it is expired')
+})
+
 test('revocation: removed device loses connectivity and leaves the roster', async function (t) {
   const { creator, joiner } = await pairedDuo(t)
 

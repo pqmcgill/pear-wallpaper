@@ -48,7 +48,7 @@ async function pairedDuo(t) {
   await joiner.ready()
   t.teardown(() => joiner.close())
   const invite = await creator.createInvite()
-  creator.on('pairing-request', ({ candidateKey }) => creator.approve(candidateKey))
+  creator.on('pairing-request', ({ candidateKey }) => creator.approve(candidateKey).catch(() => {}))
   await joiner.joinGroup(invite)
   return { creator, joiner, tn }
 }

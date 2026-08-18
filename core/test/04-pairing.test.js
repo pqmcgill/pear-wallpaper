@@ -65,6 +65,37 @@ test('pairing: createInvite stores a non-zero expiry', async function (t) {
   t.ok(inv.value.expires > Date.now(), 'invite carries a future expiry')
 })
 
+test('pairing: createInvite regenerates an expired, unredeemed invite', async function (t) {
+  const tn = await makeTestnet(t)
+  const creator = new WallpaperCore({
+    storageDir: await tmpDir(t), deviceName: 'creator', bootstrap: tn.bootstrap
+  })
+  await creator.ready()
+  await creator.createGroup()
+  t.teardown(() => creator.close())
+
+  const stale = await creator.createInvite()
+  const before = await creator.base.view.get(k.invite)
+  // Age it into the past via a creator-authored add-invite op (same
+  // pattern as the Task 6 expiry gate test): apply accepts it since only
+  // `expires` differs and the author is still the creator.
+  await creator._append(ops.addInvite({
+    id: before.value.id,
+    invite: before.value.invite,
+    publicKey: before.value.publicKey,
+    expires: Date.now() - 1000
+  }))
+  await until(creator, 'update', async () => {
+    const inv = await creator.base.view.get(k.invite)
+    return inv !== null && inv.value.expires < Date.now()
+  })
+
+  const fresh = await creator.createInvite()
+  t.not(fresh, stale, 'a fresh invite is minted, not the dead one re-served')
+  const after = await creator.base.view.get(k.invite)
+  t.ok(after.value.expires > Date.now(), 'the new view record carries a future expiry')
+})
+
 test('pairing: malformed candidate userData does not crash the creator', async function (t) {
   t.plan(2)
   const tn = await makeTestnet(t)

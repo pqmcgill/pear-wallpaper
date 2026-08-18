@@ -60,7 +60,10 @@ await core.ready()
   QR-able). Creator-only — throws `'only the creator can invite'`
   otherwise, or `'not in a group'` with no group. Calling it again
   while an invite is still live returns the *same* invite string
-  rather than minting a second one.
+  rather than minting a second one. If the outstanding invite has
+  instead expired unredeemed, calling it burns the dead invite and
+  mints a genuinely fresh one — an expired invite is never re-served
+  (spec §6: the only remedy for an expired invite is a new one).
 
 - **`await core.joinGroup(invite: string): Promise<void>`**
   Redeems an invite and resolves once a human on the creator's device
@@ -72,6 +75,19 @@ await core.ready()
   exited mid-join (persisted in local metadata) — no explicit resume
   call needed.
 
+  The returned promise can also *reject*. Build the "waiting for
+  approval" screen against these cases:
+  - **`PAIRING_REJECTED`** (blind-pairing coded error) — the creator
+    called `deny()`.
+  - **`INVITE_USED`** (blind-pairing coded error) — the invite was
+    already redeemed (single-use) by another candidate.
+  - **`INVITE_EXPIRED`** (blind-pairing coded error) — the invite's
+    24h window had already passed when it reached the creator.
+  - **`'superseded by a newer invite'`** — this call was displaced by
+    a *later* `joinGroup(otherInvite)` call on the same instance
+    before it resolved.
+  - **`'closed'`** — `close()` ran while this join was still pending.
+
 - **`core.on('pairing-request', ({ candidateKey, name }) => …)`**
   Fires on the creator's device when a candidate redeems a live
   invite. `candidateKey` is the value to pass to `approve()`/`deny()`.
@@ -81,9 +97,13 @@ await core.ready()
   The human authorization gate. `approve()` writes `add-device` and
   admits the candidate; `deny()` refuses and burns the invite (it's
   single-use either way — a denied invite can't be retried by the same
-  or any other candidate). Creator-only — throws `'only the creator
-  can approve'`/`'...deny'` otherwise, or `'no pending candidate with
-  that key'` if `candidateKey` isn't currently pending.
+  or any other candidate). Checks, in order: throws `'not in a group'`
+  if this device has no group at all; throws `'no pending candidate
+  with that key'` if `candidateKey` isn't currently pending (checked
+  before the creator check below, so a non-creator caller with a
+  bogus key sees this, not the creator-gate error); then, creator-only
+  — throws `'only the creator can approve'`/`'...deny'` for a
+  non-creator caller.
 
 ## Roster
 
@@ -100,9 +120,15 @@ await core.ready()
   group'` with no group.
 
 - **`core.on('roster-changed', () => …)`**
-  Fires when the device set changes (join/removal) or a connection to
-  a rostered device opens/closes (i.e. also on online/offline flips).
-  Keeps device-list UIs current without polling.
+  Fires when the device set changes (join/removal), and also on every
+  gate-allowed connection opening or closing — which is a wider set
+  than just rostered devices' online/offline flips: a pairing
+  candidate connecting during an open, unexpired invite window passes
+  the same gate and fires this event too, even though it isn't (yet)
+  on the roster. Keeps device-list UIs current without polling; a
+  handler that only cares about roster online/offline should re-derive
+  that from `listDevices()`'s `online` field rather than assume every
+  firing means a rostered device changed state.
 
 ## Sending
 
@@ -145,10 +171,19 @@ await core.ready()
 
 - **`core.on('wallpaper', ({ id, filePath, fromKey, meta }) => …)`**
   Fires only once the newest unapplied wallpaper targeting this device
-  is fully fetched, validated, and written to `filePath` on local disk
-  — no partial-data cases. This is the shell's trigger to run the OS
-  setter. `meta` is `{ ext, byteLength, filename }` as passed to
-  `sendWallpaper`.
+  is fully fetched and written to `filePath` on local disk — no
+  partial-data cases (atomic `.part`-then-rename, see "Storage
+  layout"). "Fetched" here means hypercore's own block-hash
+  verification passed during replication (bytes cannot silently
+  corrupt in transit); it is *not* a re-run of the JPEG/PNG/WebP
+  format sniff on receipt — that check happens once, on the sender's
+  side, inside `sendWallpaper()`, before the bytes ever get appended.
+  This is the shell's trigger to run the OS setter. `meta` is `{ ext,
+  byteLength, filename }`, computed by `sendWallpaper()` from the
+  image it was given (`ext` from the format sniff, `byteLength` from
+  the buffer, `filename` only if `sendWallpaper()`'s `image` argument
+  was a path string, else `null`) — the caller never passes `meta`
+  directly.
 
 - **`await core.pendingWallpaper(): Promise<{ id, filePath, fromKey, meta } | null>`**
   Pull-based twin of the `'wallpaper'` event, for shells that wake up

@@ -726,8 +726,16 @@ class WallpaperCore extends ReadyResource {
 
     const existing = await this.base.view.get(k.invite)
     if (existing !== null) {
-      if (this.member) await this.member.flushed()
-      return z32.encode(b4a.from(existing.value.invite, 'hex'))
+      const expired = existing.value.expires !== 0 && Date.now() > existing.value.expires
+      if (!expired) {
+        if (this.member) await this.member.flushed()
+        return z32.encode(b4a.from(existing.value.invite, 'hex'))
+      }
+      // Dead invite: nothing else can ever redeem it (spec §6's only
+      // remedy is a fresh one), and re-serving it forever would leave the
+      // creator with no working invite. Burn it and fall through to mint
+      // a new one.
+      await this._append(ops.delInvite())
     }
     const { id, invite, publicKey, expires } = BlindPairing.createInvite(this.base.key, {
       expires: Date.now() + INVITE_TTL_MS

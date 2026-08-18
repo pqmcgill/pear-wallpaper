@@ -58,6 +58,17 @@ test('scenario: full state survives restart of every member', async function (t)
   // exercises relay delivery a second time, now via a restarted relay.
   await c2.sync({ timeoutMs: 15000 })
   t.ok((await c2.pendingWallpaper()) !== null, 'queued send survived everyone restarting')
+
+  // The test's own name promises "every member" restarts, not just b/c —
+  // reopen the creator too. Deferred until after the relay proof above so
+  // a2 coming back online doesn't hand c2 a second, non-relay path to the
+  // blob mid-proof.
+  const a2 = new WallpaperCore({ storageDir: dirs.a, deviceName: 'desktop', bootstrap })
+  await a2.ready()
+  t.teardown(() => a2.close())
+
+  t.is(a2.groupStatus, 'member')
+  t.is((await a2.listDevices()).length, 3)
 })
 
 // Relies on trio(t)'s own teardown to close a/b/c.
@@ -71,4 +82,9 @@ test('scenario: revoked device cannot receive a subsequent send', async function
   )
   const roster = await a.listDevices()
   t.is(roster.length, 2)
+
+  // Prove revocation replicates, not just that the remover's own local
+  // state changed: b's roster must converge to the same 2-member view.
+  await until(b, 'update', async () => (await b.listDevices()).length === 2)
+  t.is((await b.listDevices()).length, 2, 'revocation replicated to another member')
 })

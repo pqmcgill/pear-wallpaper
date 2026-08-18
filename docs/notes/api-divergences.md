@@ -194,3 +194,69 @@ swallows thrown errors?
   asserts `await t.exception(joiner.joinGroup(invite), ...)` instead of
   the brief's `joinGroupNeverResolves` helper — the denied joiner's
   `joinGroup()` promise genuinely rejects. Verified in the full suite.
+
+## Task 5 (review fix round): undecided candidates were wedging close()
+
+The reviewer empirically reproduced a deadlock the first Task 5 pass's
+safety analysis missed: an undecided candidate (`'pairing-request'` fired,
+nobody calls `approve()`/`deny()`) makes `core.close()` hang forever.
+
+- **The miss:** the first pass reasoned `_onCandidate`'s awaited `decided`
+  promise was only reachable via the *direct-message* path
+  (`BlindPairing._onpairingrequest`, fire-and-forget, not part of any
+  awaited chain) and concluded it was therefore harmless if left
+  unsettled. That's true for *that one path*, but `Member._addRequest` is
+  also called from the **DHT-lookup path** —
+  `Member._poll()`'s `for await (const data of this._activeQuery) { ...
+  await this._add(peer.publicKey, id) ... }` (`blind-pairing/index.js`
+  around lines 411/456-470), and `_add()` calls `this._addRequest(node.value)`
+  too, which is the SAME `onadd`-awaiting function. Critically, the DHT
+  path re-triggers `_addRequest` for a session that's *already* pending in
+  `this._pendingRequests` (a candidate republishing to the DHT), re-awaiting
+  the SAME held promise. `Member._close()` awaits `_activePoll` (the
+  in-flight `_poll()` call) before resolving, `BlindPairing._close()`
+  awaits every `member.close()`, and `WallpaperCore._close()` awaits
+  `this.pairing.close()` — so an unsettled `decided` promise on the DHT
+  path transitively wedges `core.close()` forever.
+- **Resolution:** `_close()` now settles (with `new Error('closed')`)
+  every entry still in `_pending` — resolving `_onCandidate`'s `await
+  decided` — and clears the map, *before* touching `this.pairing`/
+  `this.swarm`/`this.base`. `_onCandidate` also now early-returns if
+  `this.closing` is already set, so no *new* pending candidate can be
+  created once close() has started (it would have no way to be settled).
+  Verified with a dedicated regression test
+  (`core/test/05-approve.test.js`, "close: an undecided pairing-request
+  does not wedge close()") that races `creator.close()` against a 5s
+  timeout — it must resolve as `'closed'`, not `'timeout'`.
+- **Bonus finding while fixing this — burning an invite didn't actually
+  bound it:** `approve()` deleted only *its own* candidate's `_pending`
+  entry and burned the invite, but any *other* candidate that had also
+  reached `_onCandidate` on the same (now-dead) invite stayed in
+  `_pending`, fully approvable, forever (nothing ever settled or denied
+  it). Fixed by having `approve()`, right after burning the invite,
+  iterate any remaining `_pending` entries, call `candidate.deny()` on
+  each (best-effort — a candidate may already be disconnected) and
+  `settle()` them, then clear the map. Verified with
+  "approve: burning the invite rejects other pending candidates on the
+  same invite" — two joiners request against one invite; approving the
+  first makes the second's `joinGroup()` reject via the existing
+  `'rejected'` plumbing, and only one `add-device` ever lands (roster
+  length 2, not 3).
+- **Also added:** `deny()` now has the same creator-only roster check
+  `approve()` already had (defense in depth, per the global constraint);
+  both `approve()`/`deny()` throw `'not in a group'` when `this._pending`
+  is `null`, mirroring `createInvite()`'s guard; and both now run their
+  body in `try { ... } finally { pending.settle() }` so an append failure
+  mid-approve/deny (e.g. base closing concurrently) can never leave the
+  awaiting `_onCandidate` stuck — `settle()` always runs exactly once.
+- **Test-harness note (unrelated to blind-pairing's API, but worth
+  recording):** the new "burning the invite rejects other pending
+  candidates" test had to attach a throwaway `.catch(() => {})` to
+  `secondPromise` immediately at creation, *in addition to* the later
+  `t.exception(secondPromise, ...)` assertion — otherwise Node's
+  unhandled-rejection detector can fire (and crash the process) in the
+  several-`await`-long window between `deny()` rejecting the promise and
+  the test finally asserting on it. Both handlers observe the same
+  rejection independently; this is the same pattern already used
+  elsewhere in the suite for promises that are deliberately not awaited
+  immediately.

@@ -22,7 +22,9 @@ test('approve: joiner becomes a member and both see the full roster', async func
   const { creator, joiner } = await createPair(t)
 
   const invite = await creator.createInvite()
-  creator.on('pairing-request', ({ candidateKey }) => creator.approve(candidateKey))
+  creator.on('pairing-request', ({ candidateKey }) => {
+    creator.approve(candidateKey).catch((e) => t.fail(e.message))
+  })
 
   await joiner.joinGroup(invite)
   t.is(joiner.groupStatus, 'member')
@@ -51,4 +53,53 @@ test('deny: candidate is dropped and the invite is dead', async function (t) {
   })
 
   await t.exception(joiner.joinGroup(invite), 'denied join rejects instead of hanging')
+})
+
+test('close: an undecided pairing-request does not wedge close()', async function (t) {
+  const { creator, joiner } = await createPair(t)
+  const invite = await creator.createInvite()
+
+  // Deliberately never approve/deny — creator.close() below must still
+  // resolve promptly instead of wedging on the awaiting _onCandidate.
+  creator.on('pairing-request', () => {})
+
+  joiner.joinGroup(invite).catch(() => {})
+  await until(creator, 'pairing-request', () => creator._pending.size > 0)
+
+  const closed = creator.close()
+  const timedOut = new Promise((resolve) => setTimeout(() => resolve('timeout'), 5000))
+  const result = await Promise.race([closed.then(() => 'closed'), timedOut])
+  t.is(result, 'closed', 'close() resolves even with an undecided candidate still pending')
+})
+
+test('approve: burning the invite rejects other pending candidates on the same invite', async function (t) {
+  const { creator, joiner, tn } = await createPair(t)
+  const invite = await creator.createInvite()
+
+  const second = new WallpaperCore({
+    storageDir: await tmpDir(t), deviceName: 'tablet', bootstrap: tn.bootstrap
+  })
+  await second.ready()
+  t.teardown(() => second.close())
+
+  const seen = new Set()
+  creator.on('pairing-request', ({ candidateKey }) => seen.add(candidateKey))
+
+  const joinerPromise = joiner.joinGroup(invite)
+  const secondPromise = second.joinGroup(invite)
+  // Deny fires (from approve()'s burn-the-invite cleanup) well before we
+  // get around to asserting on secondPromise below — attach a no-op
+  // handler now so Node never sees it as unhandled in the meantime;
+  // t.exception() still observes the same rejection independently.
+  secondPromise.catch(() => {})
+
+  await until(creator, 'pairing-request', () => seen.size === 2, 10000)
+
+  await creator.approve(joiner.deviceKey)
+
+  await joinerPromise
+  await t.exception(secondPromise, 'second candidate on the burned invite is rejected')
+
+  await until(creator, 'update', async () => (await creator.listDevices()).length === 2)
+  t.is((await creator.listDevices()).length, 2, 'only the approved device landed in the roster')
 })

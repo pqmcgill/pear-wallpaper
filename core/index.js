@@ -280,6 +280,11 @@ class WallpaperCore extends ReadyResource {
   }
 
   async _onCandidate(candidate) {
+    // Never open a new pending candidate once close() has started —
+    // close() drains and settles whatever is already in `_pending`, but
+    // it can't wait for candidates that haven't been added yet.
+    if (this.closing) return
+
     // AUTHORIZATION GATE — deliberate deviation from autopass, which
     // auto-admits any valid invite holder. We hold the candidate and
     // wait for an explicit approve()/deny() (Task 5).
@@ -313,6 +318,9 @@ class WallpaperCore extends ReadyResource {
 
     // A second candidate on the same invite must not silently replace the
     // entry the human was already shown via 'pairing-request'.
+    // DEFERRED (ledgered by the controller): stale-session first-wins —
+    // if a candidate reconnects/restarts with the same key while still
+    // pending, this drops the newer session rather than replacing it.
     if (this._pending.has(key)) return
 
     // blind-pairing's Member._addRequest awaits this handler's returned
@@ -321,9 +329,14 @@ class WallpaperCore extends ReadyResource {
     // until approve()/deny() has actually called confirm()/deny() on the
     // candidate. Resolving early (e.g. right after emit()) would let
     // _addRequest see a still-empty response and drop the reply, silently
-    // stranding the joiner. approve()/deny() call `settle()` once done.
+    // stranding the joiner. approve()/deny() call `settle()` once done;
+    // close() also settles (with an error) any candidate still pending so
+    // an undecided candidate can never wedge close() forever (this promise
+    // is awaited, transitively, by Member._close()/BlindPairing._close()).
     let settle
-    const decided = new Promise((resolve) => { settle = resolve })
+    const decided = new Promise((resolve, reject) => {
+      settle = (err) => { if (err) reject(err); else resolve() }
+    })
     this._pending.set(key, { candidate, key, swarmKey, name, settle })
     this.emit('pairing-request', { candidateKey: key, name })
     await decided
@@ -354,46 +367,83 @@ class WallpaperCore extends ReadyResource {
   }
 
   async approve(candidateKey) {
+    if (this._pending === null) throw new Error('not in a group')
     const pending = this._pending.get(candidateKey)
     if (!pending) throw new Error('no pending candidate with that key')
     const self = await this.base.view.get(k.device(this.deviceKey))
     if (self === null || !self.value.isCreator) throw new Error('only the creator can approve')
 
-    await this._append(ops.addDevice({
-      key: pending.key,
-      swarmKey: pending.swarmKey,
-      name: pending.name
-    }))
-    // The stored invite record has no `additional` field (createInvite is
-    // never called with `data`) — pass it explicitly as null rather than
-    // reference `inv.value.additional`, which doesn't exist. See Task 4/5
-    // divergence notes.
-    pending.candidate.confirm({
-      key: this.base.key,
-      encryptionKey: this.base.encryptionKey,
-      additional: null
-    })
-    this._pending.delete(candidateKey)
-    await this._append(ops.delInvite()) // single-use: an invite admits one device
-    pending.settle() // let the awaiting _onCandidate return, so blind-pairing sends the reply
+    try {
+      await this._append(ops.addDevice({
+        key: pending.key,
+        swarmKey: pending.swarmKey,
+        name: pending.name
+      }))
+      // The stored invite record has no `additional` field (createInvite is
+      // never called with `data`) — pass it explicitly as null rather than
+      // reference `inv.value.additional`, which doesn't exist. See Task 4/5
+      // divergence notes.
+      pending.candidate.confirm({
+        key: this.base.key,
+        encryptionKey: this.base.encryptionKey,
+        additional: null
+      })
+      this._pending.delete(candidateKey)
+      await this._append(ops.delInvite()) // single-use: an invite admits one device
+
+      // Burning the invite must actually bound it: any OTHER candidate
+      // still pending on this same (now-dead) invite must not remain
+      // approvable afterward. Deny each (best-effort — a candidate may
+      // have disconnected) and settle its awaiting _onCandidate so their
+      // joinGroup() rejects via the already-wired 'rejected' path instead
+      // of hanging until superseded.
+      for (const other of this._pending.values()) {
+        try { other.candidate.deny() } catch { /* best-effort only */ }
+        other.settle()
+      }
+      this._pending.clear()
+    } finally {
+      // Always let the awaiting _onCandidate return — even if an append
+      // above threw (e.g. base closing mid-approve) — so we never leave
+      // it stuck forever; see the close()-wedge fix in _close().
+      pending.settle()
+    }
   }
 
   async deny(candidateKey) {
+    if (this._pending === null) throw new Error('not in a group')
     const pending = this._pending.get(candidateKey)
     if (!pending) throw new Error('no pending candidate with that key')
+    const self = await this.base.view.get(k.device(this.deviceKey))
+    if (self === null || !self.value.isCreator) throw new Error('only the creator can deny')
+
     // Investigated (Task 5): blind-pairing-core's MemberRequest exposes an
     // explicit deny() that encodes and sends a PAIRING_REJECTED response,
     // which the candidate's CandidateRequest.handleResponse() turns into a
     // 'rejected' event on candidate.request — already wired in pairer.js
     // to reject joinGroup()'s promise. So a denied joiner's joinGroup call
     // rejects instead of hanging until superseded.
-    pending.candidate.deny()
-    this._pending.delete(candidateKey)
-    await this._append(ops.delInvite()) // burn it: deny means this invite is compromised/unwanted
-    pending.settle() // let the awaiting _onCandidate return, so blind-pairing sends the reply
+    try {
+      pending.candidate.deny()
+      this._pending.delete(candidateKey)
+      await this._append(ops.delInvite()) // burn it: deny means this invite is compromised/unwanted
+    } finally {
+      pending.settle()
+    }
   }
 
   async _close() {
+    // Settle (with an error) every still-pending candidate before touching
+    // pairing/swarm/base: an undecided candidate's _onCandidate is stuck
+    // awaiting its `decided` promise, which is transitively awaited by
+    // Member._close() (via _activePoll, on the DHT-lookup path) ->
+    // BlindPairing._close() -> `this.pairing.close()` below — so without
+    // this, close() would wedge forever on any pairing-request nobody
+    // ever approved/denied.
+    if (this._pending !== null) {
+      for (const pending of this._pending.values()) pending.settle(new Error('closed'))
+      this._pending.clear()
+    }
     if (this._activeJoin !== null) {
       const stale = this._activeJoin
       this._activeJoin = null

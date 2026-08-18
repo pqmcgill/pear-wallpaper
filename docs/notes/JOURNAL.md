@@ -12,3 +12,4 @@
 - 2026-08-18 Task 10: applied acks close the loop (delivered/superseded status, send-updated events, received history)
 - 2026-08-18 Task 11: bounded sync + blob relaying; offline delivery via relay proven (sender-offline scenario)
 - 2026-08-18 Task 12: scenario matrix green (multi-target, full-restart, revocation-blocks-send); API README written; core-v0.1.0
+- 2026-08-18 FINAL whole-branch review (opus): 4 Critical (3 proven security holes) + 8 Important. Fixed C1–C4 + I1–I3 on-branch in one wave (0b512ee), re-reviewed clean, 45/45 tests. Tag core-v0.1.0 re-pointed to 0b512ee. Spec §3.1 as-built deltas folded in. I4–I8 ruled to Plan 2.

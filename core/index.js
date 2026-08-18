@@ -1,3 +1,4 @@
+const fs = require('fs')
 const Corestore = require('corestore')
 const Autobase = require('autobase')
 const Hyperbee = require('hyperbee')
@@ -12,6 +13,7 @@ const BlobStore = require('./lib/blobs.js')
 const { apply, k } = require('./lib/apply.js')
 const ops = require('./lib/ops.js')
 const { requestJoin } = require('./lib/pairer.js')
+const { validateImage } = require('./lib/image.js')
 
 const HEX64 = /^[0-9a-f]{64}$/
 const INVITE_TTL_MS = 24 * 60 * 60 * 1000
@@ -251,6 +253,48 @@ class WallpaperCore extends ReadyResource {
       })
     }
     return out
+  }
+
+  async sendWallpaper(image, targets) {
+    if (this.base === null) throw new Error('not in a group')
+    if (!Array.isArray(targets) || targets.length === 0) throw new Error('targets required')
+    const buffer = typeof image === 'string' ? await fs.promises.readFile(image) : image
+    const ext = validateImage(buffer)
+    for (const key of targets) {
+      if ((await this.base.view.get(k.device(key))) === null) throw new Error(`target ${key} is not in the roster`)
+    }
+    const blob = await this.blobs.put(buffer)
+    const op = ops.setWallpaper({
+      from: this.deviceKey,
+      targets,
+      blob,
+      meta: { ext, byteLength: buffer.byteLength, filename: typeof image === 'string' ? image : null }
+    })
+    await this._append(op)
+    return { id: op.id }
+  }
+
+  async listSends({ limit = 20 } = {}) {
+    if (this.base === null) return []
+    const sends = []
+    for await (const node of this.base.view.createReadStream({ gte: 'send/', lt: 'send0' })) {
+      sends.push(node.value)
+    }
+    sends.sort((a, b) => b.seq - a.seq)
+    const out = []
+    for (const s of sends.slice(0, limit)) {
+      const targets = []
+      for (const key of s.targets) {
+        targets.push({ key, status: await this._targetStatus(s, key) })
+      }
+      out.push({ id: s.id, meta: s.meta, sentAt: s.sentAt, targets })
+    }
+    return out
+  }
+
+  async _targetStatus(send, targetKey) {
+    const ack = await this.base.view.get(k.ack(send.id, targetKey))
+    return ack !== null ? 'delivered' : 'pending' // 'superseded' added in Task 10
   }
 
   async _startSwarm() {

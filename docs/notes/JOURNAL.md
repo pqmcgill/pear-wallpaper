@@ -7,3 +7,4 @@
 - 2026-08-17 Task 5: approve/deny complete pairing; rosters converge end-to-end
 - 2026-08-17 Task 6: roster-gated connections + revocation (gate = who's on the wire; apply = what ops count)
 - 2026-08-17 Task 7: per-device hyperblobs store; cross-peer fetch by capability over gated connections
+- 2026-08-18 Task 8: sendWallpaper (validate → blob → op → resolve immediately); listSends pending status

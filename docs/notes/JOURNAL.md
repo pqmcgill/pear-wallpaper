@@ -8,3 +8,4 @@
 - 2026-08-17 Task 6: roster-gated connections + revocation (gate = who's on the wire; apply = what ops count)
 - 2026-08-17 Task 7: per-device hyperblobs store; cross-peer fetch by capability over gated connections
 - 2026-08-18 Task 8: sendWallpaper (validate → blob → op → resolve immediately); listSends pending status
+- 2026-08-18 Task 9: receive pipeline (newest-unapplied detection, bounded blob fetch, atomic file materialization, wallpaper event + pendingWallpaper)

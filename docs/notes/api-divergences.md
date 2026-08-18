@@ -339,3 +339,42 @@ nobody calls `approve()`/`deny()`) makes `core.close()` hang forever.
   `core/test/06-gating.test.js`, preserving the test's intent (every
   rostered member's gate rejects a stranger) rather than the brief's
   undercount.
+
+## Task 9: hyperblobs/hypercore `{ timeout }` shape confirmed; brief's `_materialize` has a same-entry concurrency race
+
+- **Checked installed `hyperblobs@2.8.0` and `hypercore` source** per the
+  controller's instruction. `Hyperblobs.get(id, opts)` forwards `opts`
+  straight through: the single-block fast path calls
+  `this.core.get(id.blockOffset, opts)` directly (no try/catch), and the
+  multi-block path's `createReadStream(id, opts)` also threads `opts` down
+  to the underlying `core.get`/session calls. `hypercore/index.js` reads
+  `opts.timeout` (`core/node_modules/hypercore/index.js:823-824`,
+  `:966-967`): `if (timeout) req.context.setTimeout(req, timeout)`, and a
+  fired timeout rejects with `HypercoreError.REQUEST_TIMEOUT()` (code
+  `REQUEST_TIMEOUT`, `hypercore-errors/index.js:68`) — not
+  `BLOCK_NOT_AVAILABLE`, so `Hyperblobs.get`'s multi-block try/catch (which
+  only swallows `BLOCK_NOT_AVAILABLE`) rethrows it, and the single-block
+  path was never wrapped at all. **No divergence**: `{ timeout: timeoutMs }`
+  is exactly the right shape, and a bounded `blobs.get()` call genuinely
+  rejects on timeout as the brief assumed ("rejection = stays pending,
+  retried next update"). Implemented in `core/lib/blobs.js`'s `get(ref,
+  { timeoutMs = 0 } = {})` verbatim per the brief.
+- **Bug found in the brief's own `_materialize` snippet, fixed (not an API
+  drift, but recorded here per the task's divergence-logging instruction):**
+  `pendingWallpaper()` calls `_materialize(entry)` directly, bypassing the
+  `_applyBusy` guard that serializes `_checkIncoming`'s calls. In
+  `core/test/09-receive.test.js`'s "pendingWallpaper pulls the same entry"
+  test, `until()`'s poll loop calls `joiner.pendingWallpaper()` on the same
+  entry the `update`-triggered `_checkIncoming()` is *also* materializing
+  concurrently — both instances of `_materialize` compute the same
+  `tmpPath` (`filePath + '.part'`), both `writeFile` it, and the first
+  `rename()` wins while the second throws `ENOENT` (its `.part` is already
+  gone), crashing the process (empirically reproduced running the brief's
+  code verbatim). **Resolution:** `_materialize` now dedupes on
+  `entry.id` via a `this._materializing` Map of in-flight promises — a
+  second concurrent call for the same id awaits the first call's promise
+  instead of starting its own fetch+write. The actual fetch+write body
+  moved unchanged into a new `_materializeNow(entry, filePath)`. Verified:
+  removing the dedupe reproduces the `ENOENT` crash deterministically on
+  every run of the affected test; with it, the full suite (27/27) is green
+  on repeated runs.

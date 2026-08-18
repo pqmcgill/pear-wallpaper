@@ -22,8 +22,12 @@ class BlobStore {
     return { core: this.localKey, id }
   }
 
-  async get(ref) {
-    if (ref.core === this.localKey) return this.local.get(ref.id)
+  // timeoutMs = 0 (default) waits forever, matching hyperblobs'/hypercore's
+  // own default. A caller that can't afford to wedge on a revoked sender,
+  // an offline peer, or a garbage ref (receive/relay loops) passes a bound
+  // and treats rejection as "stays pending, retry next update" (spec §6).
+  async get(ref, { timeoutMs = 0 } = {}) {
+    if (ref.core === this.localKey) return this.local.get(ref.id, { timeout: timeoutMs })
     let blobs = this._remotes.get(ref.core)
     if (!blobs) {
       const core = this.store.get(b4a.from(ref.core, 'hex'))
@@ -31,7 +35,7 @@ class BlobStore {
       blobs = new Hyperblobs(core)
       this._remotes.set(ref.core, blobs)
     }
-    return blobs.get(ref.id) // waits for the download over any replicating connection
+    return blobs.get(ref.id, { timeout: timeoutMs }) // waits (bounded) for the download over any replicating connection
   }
 
   async close() {

@@ -1,4 +1,5 @@
 const fs = require('fs')
+const path = require('path')
 const Corestore = require('corestore')
 const Autobase = require('autobase')
 const Hyperbee = require('hyperbee')
@@ -17,6 +18,8 @@ const { validateImage } = require('./lib/image.js')
 
 const HEX64 = /^[0-9a-f]{64}$/
 const INVITE_TTL_MS = 24 * 60 * 60 * 1000
+
+function noop() {}
 
 class WallpaperCore extends ReadyResource {
   constructor({ storageDir, deviceName, bootstrap = null }) {
@@ -38,6 +41,9 @@ class WallpaperCore extends ReadyResource {
     this._joining = false
     this._activeJoin = null // { invite, candidate, candidateReady, reject, promise } while joinGroup is in flight
     this._deviceKey = null
+    this._applyBusy = false
+    this._lastEmitted = null
+    this._materializing = new Map() // send id -> in-flight _materialize promise
   }
 
   get deviceKey() {
@@ -92,6 +98,7 @@ class WallpaperCore extends ReadyResource {
     })
     this.on('update', () => this.emit('roster-changed')) // refined in Task 10
     this.on('roster-changed', () => this._enforceGate().catch(() => {}))
+    this.on('update', () => { this._checkIncoming().catch(noop) })
   }
 
   async createGroup() {
@@ -295,6 +302,81 @@ class WallpaperCore extends ReadyResource {
   async _targetStatus(send, targetKey) {
     const ack = await this.base.view.get(k.ack(send.id, targetKey))
     return ack !== null ? 'delivered' : 'pending' // 'superseded' added in Task 10
+  }
+
+  // Called on every base update (wired in _boot).
+  async _checkIncoming() {
+    if (this.base === null || this.blobs === null || !this.blobs.local) return
+    if (this._applyBusy) return
+    this._applyBusy = true
+    try {
+      const entry = await this._newestUnappliedForMe()
+      if (entry === null) return
+      if (this._lastEmitted === entry.id) return
+      const filePath = await this._materialize(entry)
+      this._lastEmitted = entry.id
+      this.emit('wallpaper', { id: entry.id, filePath, fromKey: entry.from, meta: entry.meta })
+    } finally {
+      this._applyBusy = false
+    }
+  }
+
+  // Newest send targeting us that we haven't acked yet — "unapplied" here
+  // means "no ack/<id>/<us> record", not "not yet materialized to disk"
+  // (materialization is idempotent and re-checked in _materialize itself).
+  async _newestUnappliedForMe() {
+    let newest = null
+    for await (const node of this.base.view.createReadStream({ gte: 'send/', lt: 'send0' })) {
+      const s = node.value
+      if (!s.targets.includes(this.deviceKey)) continue
+      if ((await this.base.view.get(k.ack(s.id, this.deviceKey))) !== null) continue
+      if (newest === null || s.seq > newest.seq) newest = s
+    }
+    return newest
+  }
+
+  // Fetch the blob (bounded — an unfetchable blob must not wedge the
+  // receive loop) and write it atomically: .part then rename, so any
+  // shell watching the received/ directory never observes a partial file.
+  //
+  // Dedupe on entry.id: _checkIncoming (event-driven) and pendingWallpaper
+  // (pulled directly, for shells that woke up late) can both land here for
+  // the same entry concurrently. Without this, both writers use the SAME
+  // tmpPath (filePath + '.part') — the first rename() wins and the second
+  // fails ENOENT because its .part is already gone. Share the one in-flight
+  // fetch+write instead of racing two of them.
+  async _materialize(entry) {
+    const dir = path.join(this.storageDir, 'received')
+    await fs.promises.mkdir(dir, { recursive: true })
+    const filePath = path.join(dir, entry.id + entry.meta.ext)
+    try {
+      await fs.promises.access(filePath)
+      return filePath // already on disk
+    } catch {}
+    const inFlight = this._materializing.get(entry.id)
+    if (inFlight) return inFlight
+    const promise = this._materializeNow(entry, filePath).finally(() => {
+      this._materializing.delete(entry.id)
+    })
+    this._materializing.set(entry.id, promise)
+    return promise
+  }
+
+  async _materializeNow(entry, filePath) {
+    const buffer = await this.blobs.get(entry.blob, { timeoutMs: 30000 }) // bounded: rejection = stays pending, retried next sync
+    const tmpPath = filePath + '.part'
+    await fs.promises.writeFile(tmpPath, buffer)
+    await fs.promises.rename(tmpPath, filePath) // atomic: shells never see partial files
+    return filePath
+  }
+
+  // For shells that wake up late and missed the 'wallpaper' event.
+  async pendingWallpaper() {
+    if (this.base === null) return null
+    const entry = await this._newestUnappliedForMe()
+    if (entry === null) return null
+    const filePath = await this._materialize(entry)
+    return { id: entry.id, filePath, fromKey: entry.from, meta: entry.meta }
   }
 
   async _startSwarm() {

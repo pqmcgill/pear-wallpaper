@@ -1609,7 +1609,21 @@ const path = require('path')
     return newest
   }
 
-  async _materialize(entry) {
+  // As-built note (Task 9 fix): _checkIncoming and pendingWallpaper can race
+  // into _materialize for the same id (same .part path → deterministic ENOENT).
+  // An in-flight dedupe map shares one fetch+write per id; .finally cleanup on
+  // success AND failure so a timed-out fetch never poisons retry-next-update.
+  _materialize(entry) {
+    const existing = this._materializing.get(entry.id)
+    if (existing) return existing
+    const promise = this._materializeNow(entry).finally(() => {
+      this._materializing.delete(entry.id)
+    })
+    this._materializing.set(entry.id, promise)
+    return promise
+  }
+
+  async _materializeNow(entry) {
     const dir = path.join(this.storageDir, 'received')
     await fs.promises.mkdir(dir, { recursive: true })
     const filePath = path.join(dir, entry.id + entry.meta.ext)

@@ -53,4 +53,24 @@ async function pairedDuo(t) {
   return { creator, joiner, tn }
 }
 
-module.exports = { makeTestnet, tmpDir, until, eventFlush, pairedDuo }
+// Three devices, fully paired: creator (a) invites B then C, approving
+// each. Shared by tests (Task 11 offline-relay marquee test; Task 12) that
+// need a live 3-member group rather than exercising the pairing flow itself.
+async function trio(t) {
+  const tn = await makeTestnet(t)
+  const mk = async (name) => {
+    const c = new WallpaperCore({ storageDir: await tmpDir(t), deviceName: name, bootstrap: tn.bootstrap })
+    await c.ready()
+    return c
+  }
+  const a = await mk('desktop')
+  await a.createGroup()
+  a.on('pairing-request', ({ candidateKey }) => a.approve(candidateKey))
+  const b = await mk('laptop')
+  await b.joinGroup(await a.createInvite())
+  const c = await mk('phone')
+  await c.joinGroup(await a.createInvite())
+  return { a, b, c, tn }
+}
+
+module.exports = { makeTestnet, tmpDir, until, eventFlush, pairedDuo, trio }

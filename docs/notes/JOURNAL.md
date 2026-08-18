@@ -10,3 +10,4 @@
 - 2026-08-18 Task 8: sendWallpaper (validate → blob → op → resolve immediately); listSends pending status
 - 2026-08-18 Task 9: receive pipeline (newest-unapplied detection, bounded blob fetch, atomic file materialization, wallpaper event + pendingWallpaper)
 - 2026-08-18 Task 10: applied acks close the loop (delivered/superseded status, send-updated events, received history)
+- 2026-08-18 Task 11: bounded sync + blob relaying; offline delivery via relay proven (sender-offline scenario)

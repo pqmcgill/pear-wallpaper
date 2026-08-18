@@ -46,6 +46,7 @@ class WallpaperCore extends ReadyResource {
     this._materializing = new Map() // send id -> in-flight _materialize promise
     this._lastDevices = null // Task 10: cached device-row keys, for diffing on update
     this._lastAcks = null // Task 10: cached ack-row keys, for diffing on update
+    this._relaying = false // Task 11: reentrancy guard against stacked _relayBlobs sweeps
   }
 
   get deviceKey() {
@@ -101,6 +102,7 @@ class WallpaperCore extends ReadyResource {
     this.on('update', () => { this._checkRosterAndAcks().catch(noop) })
     this.on('roster-changed', () => this._enforceGate().catch(() => {}))
     this.on('update', () => { this._checkIncoming().catch(noop) })
+    this.on('update', () => { this._relayBlobs().catch(noop) })
   }
 
   async createGroup() {
@@ -458,6 +460,94 @@ class WallpaperCore extends ReadyResource {
     if (entry === null) return null
     const filePath = await this._materialize(entry)
     return { id: entry.id, filePath, fromKey: entry.from, meta: entry.meta }
+  }
+
+  // Download blobs for EVERY unapplied send (not just ours), so this
+  // device can serve them to targets later. This is what makes any
+  // online member a relay (spec §5).
+  //
+  // Reentrancy guard (controller-sanctioned deviation from the brief):
+  // this is wired to 'update' AND called from sync(), so a burst of base
+  // updates (e.g. replicating several ops in quick succession) could stack
+  // multiple full-relay sweeps concurrently, each doing a bounded-but-slow
+  // blobs.get() per un-acked send. A single in-flight sweep is enough —
+  // later 'update's will trigger their own sweep once this one finishes.
+  async _relayBlobs() {
+    if (this.base === null) return
+    if (this._relaying) return
+    this._relaying = true
+    try {
+      for await (const node of this.base.view.createReadStream({ gte: 'send/', lt: 'send0' })) {
+        const s = node.value
+        let done = true
+        for (const target of s.targets) {
+          if ((await this.base.view.get(k.ack(s.id, target))) === null) done = false
+        }
+        if (done) continue
+        await this.blobs.get(s.blob, { timeoutMs: 30000 }).catch(() => {}) // bounded best effort; retried next sync
+      }
+    } finally {
+      this._relaying = false
+    }
+  }
+
+  // Bounded sync round for shells that can't stay resident (Android
+  // lifecycle): flush the swarm's pending connections, ingest whatever
+  // connected peers have, relay any un-acked blobs, and materialize
+  // anything now addressed to us — all raced against timeoutMs so a
+  // stalled peer can never wedge the caller.
+  //
+  // DIVERGENCE from the brief (logged per the API-drift rule): the brief's
+  // Step 3 code calls a bare `await this.base.update()` in the belief that
+  // it "waits for the base to settle" over the network. Checked against
+  // the installed autobase@7.28.1 source (node_modules/autobase/index.js):
+  // `update()` just awaits the debounced `_bump()` -> `_advance()`, which
+  // re-linearizes whatever has ALREADY arrived locally — it does not wait
+  // for a connected peer's newly-appended block to finish streaming over
+  // the wire. Confirmed empirically: calling flush()+update() immediately
+  // after a remote append reliably misses it, while waiting on this
+  // instance's own 'update' event (already wired in _boot, fired whenever
+  // autobase ingests newly-replicated data) reliably catches it within
+  // ~1s. So sync() uses `_settle()` below instead of a single bare
+  // `update()` call — still purely event-driven (no fixed sleep): it keeps
+  // resetting a short idle timer every time an 'update' fires, and returns
+  // once nothing new has arrived for `idleMs`, bounded overall by the
+  // same timeoutMs race as the rest of sync().
+  async sync({ timeoutMs = 30000 } = {}) {
+    if (this.opened === false) await this.ready()
+    if (this.base === null) return
+    let timer
+    const timeout = new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs) })
+    const work = (async () => {
+      await this.swarm.flush()          // announced + pending connections done
+      await this._settle()              // ingest whatever connected peers have (event-driven; see divergence note)
+      await this._relayBlobs()
+      await this._checkIncoming()
+    })()
+    await Promise.race([work, timeout])
+    clearTimeout(timer)
+  }
+
+  // Ingest replicated data as it lands: run an immediate base.update() for
+  // whatever's already local, then wait for a quiet window on this
+  // instance's 'update' event (reset on every fresh update) so data still
+  // in flight over an already-open connection gets a real chance to land
+  // before sync() moves on to relaying/materializing.
+  async _settle(idleMs = 250) {
+    await this.base.update()
+    await new Promise((resolve) => {
+      const done = () => {
+        this.off('update', onUpdate)
+        resolve()
+      }
+      let timer = setTimeout(done, idleMs)
+      const onUpdate = () => {
+        clearTimeout(timer)
+        timer = setTimeout(done, idleMs)
+      }
+      this.on('update', onUpdate)
+    })
+    await this.base.update()
   }
 
   async _startSwarm() {

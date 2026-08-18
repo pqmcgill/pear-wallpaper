@@ -6,3 +6,4 @@
 - 2026-08-17 Task 4 review addendum: 2 fix rounds — userData validation (crash fix), creator-gated _onCandidate, supersede semantics with settled promises, 24h invite expiry, candidate-side 'rejected' event wired (blind-pairing DOES surface dead invites, one level below its swallowing poll loop)
 - 2026-08-17 Task 5: approve/deny complete pairing; rosters converge end-to-end
 - 2026-08-17 Task 6: roster-gated connections + revocation (gate = who's on the wire; apply = what ops count)
+- 2026-08-17 Task 7: per-device hyperblobs store; cross-peer fetch by capability over gated connections

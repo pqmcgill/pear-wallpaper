@@ -8,6 +8,7 @@ const z32 = require('z32')
 const c = require('compact-encoding')
 const b4a = require('b4a')
 const LocalMeta = require('./lib/meta.js')
+const BlobStore = require('./lib/blobs.js')
 const { apply, k } = require('./lib/apply.js')
 const ops = require('./lib/ops.js')
 const { requestJoin } = require('./lib/pairer.js')
@@ -26,6 +27,7 @@ class WallpaperCore extends ReadyResource {
     this.store = new Corestore(storageDir + '/corestore')
     this.meta = new LocalMeta(this.store)
     this.base = null
+    this.blobs = null
     this.swarm = null
     this.pairing = null
     this.member = null
@@ -59,6 +61,7 @@ class WallpaperCore extends ReadyResource {
     if (group !== null) {
       this._boot(group)
       await this.base.ready()
+      await this.blobs.ready()
       await this._startSwarm()
     }
 
@@ -81,6 +84,7 @@ class WallpaperCore extends ReadyResource {
         }),
       apply
     })
+    this.blobs = new BlobStore(this.store)
     this.base.on('update', () => {
       if (!this.base._interrupting) this.emit('update')
     })
@@ -93,6 +97,7 @@ class WallpaperCore extends ReadyResource {
     if (this.base !== null || this._joining) throw new Error('already in a group (or joining one)')
     this._boot()
     await this.base.ready()
+    await this.blobs.ready()
     await this._startSwarm()
     await this._append(ops.addDevice({
       key: this.deviceKey,
@@ -173,6 +178,7 @@ class WallpaperCore extends ReadyResource {
       const result = await promise
       this._boot(result)
       await this.base.ready()
+      await this.blobs.ready()
       // become a full member: wait until our writer was added
       if (typeof this.base.waitForWritable === 'function') {
         await this.base.waitForWritable()

@@ -89,5 +89,40 @@ await a.listDevices()   // 1 device
 B's connection drops; reconnects are refused at the gate. B keeps its old
 replicated data — revocation stops the future, not the past (by design).
 
+## Act 7 — Blob store (Task 7; requires a paired A + B from Acts 1–3)
+
+Terminal A — write bytes, capture the ref:
+
+```js
+const b4a = require('b4a')
+const payload = b4a.alloc(1024 * 1024, 0xab)      // 1 MiB of 0xAB
+const ref = await a.blobs.put(payload)
+ref                    // { core: '<64-hex>', id: { byteOffset, blockOffset, blockLength, byteLength } }
+JSON.stringify(ref)    // copy this — the ref is the ONLY thing that crosses terminals
+```
+
+Terminal B — fetch by ref alone:
+
+```js
+const b4a = require('b4a')
+const ref = JSON.parse('<PASTE>')
+const bytes = await b.blobs.get(ref)   // first call downloads over the gated connection
+bytes.byteLength                       // 1048576
+bytes.every((x) => x === 0xab)         // true — byte-identical, Merkle-verified
+const again = await b.blobs.get(ref)   // instant now: B holds the blocks locally (B is a relay for them)
+```
+
+Things to notice:
+- No file, no path, no upload step crossed the terminals — only the ~100-byte
+  ref. The bytes moved over the roster-gated connection, verified against the
+  sender's signed Merkle tree.
+- After the first `get`, B can serve these bytes to a third device even if A
+  goes offline — that's the relay behavior Task 11 automates.
+- **Expected-hang demo (optional, sacrifices the REPL line):** `put` a second
+  blob on A, close A (`await a.close()`), then `b.blobs.get(secondRef)` on B —
+  it awaits forever, since nobody online has the bytes and `get` has no bound
+  yet (bounded `timeoutMs` lands in Task 9 by ruling). Ctrl+C kills the REPL,
+  not just the await, so do this last.
+
 Cleanup: `rm -rf /tmp/pw-qa`. Not QA-able yet: sendWallpaper/pendingWallpaper
-(Tasks 7–10); invite expiry (24h window).
+(Tasks 8–10); invite expiry (24h window).

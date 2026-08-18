@@ -224,10 +224,45 @@ nobody calls `approve()`/`deny()`) makes `core.close()` hang forever.
   `this.swarm`/`this.base`. `_onCandidate` also now early-returns if
   `this.closing` is already set, so no *new* pending candidate can be
   created once close() has started (it would have no way to be settled).
-  Verified with a dedicated regression test
-  (`core/test/05-approve.test.js`, "close: an undecided pairing-request
-  does not wedge close()") that races `creator.close()` against a 5s
-  timeout — it must resolve as `'closed'`, not `'timeout'`.
+  Verified with two regression tests in `core/test/05-approve.test.js`,
+  both racing `creator.close()` against a 5s timeout (must resolve as
+  `'closed'`, not `'timeout'`):
+  - "close: an undecided pairing-request does not wedge close()" — the
+    straightforward black-box scenario (pairing-request fires, nobody
+    decides, close). **Empirically this one does NOT reproduce the bug**:
+    checked by temporarily removing the `_close()` drain and re-running —
+    it still passed in ~600ms. Root cause: by the time this test calls
+    `close()`, `Member._activePoll` is idle (`null`, parked in
+    `timeout.wait()`) because the *first* DHT poll (kicked off at `Member`
+    creation, back during `createGroup()`) already finished — with
+    `DEFAULT_POLL` ~7 minutes, the *second* poll cycle that could
+    plausibly overlap our candidate's window never starts within the
+    test. `Member._abort()`'s `while (this._activePoll !== null)` is a
+    no-op when `_activePoll` is already `null`, so this test alone proves
+    nothing about the DHT-path race — it only proves the direct-message
+    path stays harmless (already known from the original Task 5 pass).
+  - "close: does not wedge on a DHT-poll re-check of an undecided
+    candidate" — added after the above negative result, to deterministically
+    force the exact hazardous state rather than hope for a network-timing
+    race: grabs the joiner's already-encoded wire bytes
+    (`joiner._activeJoin.candidate.request.encode()` — the same bytes the
+    live connection already sent) and calls `creator.member._addRequest(wireBytes)`
+    directly, simulating `Member._poll()`'s `_add()` re-invoking
+    `_addRequest` for a session that's already pending. Assigns the
+    resulting promise to `member._activePoll` (wrapped in `.finally()` to
+    null it back out once settled — mirroring `_run()`'s own contract for
+    that field; skipping the `.finally()` reproduced a *different*
+    artifact, an infinite busy-loop in `_abort()`'s `while`, once the fix
+    made the promise resolve but nothing ever reset `_activePoll` to
+    `null` — that's specific to driving the internal field by hand in a
+    test, not a real blind-pairing behavior).
+    **Confirmed this one DOES reproduce the bug:** with the `_close()`
+    drain temporarily removed, this test correctly failed
+    (`not ok ... actual: timeout, expected: closed`) rather than hanging
+    the runner (the 5s `Promise.race` did its job) — direct proof the fix
+    addresses the reviewer's actual repro, not just a lookalike scenario.
+    With the fix restored, both tests and the full suite (run twice) are
+    green.
 - **Bonus finding while fixing this — burning an invite didn't actually
   bound it:** `approve()` deleted only *its own* candidate's `_pending`
   entry and burned the invite, but any *other* candidate that had also

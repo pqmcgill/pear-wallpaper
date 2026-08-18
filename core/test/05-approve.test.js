@@ -72,6 +72,45 @@ test('close: an undecided pairing-request does not wedge close()', async functio
   t.is(result, 'closed', 'close() resolves even with an undecided candidate still pending')
 })
 
+test('close: does not wedge on a DHT-poll re-check of an undecided candidate', async function (t) {
+  const { creator, joiner } = await createPair(t)
+  const invite = await creator.createInvite()
+  creator.on('pairing-request', () => {}) // nobody decides
+
+  joiner.joinGroup(invite).catch(() => {})
+  await until(creator, 'pairing-request', () => creator._pending.size > 0)
+
+  // The previous test alone doesn't reproduce the critical bug the
+  // reviewer found: Member._addRequest is awaited from TWO places —
+  // the live connection's onmessage handler (fire-and-forget, harmless)
+  // AND Member._poll()'s DHT-lookup loop (`_add()` -> `_addRequest()`,
+  // blind-pairing/index.js ~411-470), which re-decodes the SAME wire
+  // bytes into a new MemberRequest, sees the session already pending,
+  // and re-awaits the SAME still-unsettled onadd promise. Member._close()
+  // awaits that in-flight poll via `while (this._activePoll !== null)
+  // await this._activePoll`, so if close() lands while that DHT-path
+  // await is live, it hangs — but DEFAULT_POLL is ~7 minutes, so the real
+  // poll almost never overlaps this test's window. Force the exact state
+  // directly instead of hoping to win that race.
+  const wireBytes = joiner._activeJoin.candidate.request.encode()
+  const member = creator.member
+  // Mirror _run()'s own contract for this field: it clears _activePoll
+  // back to null once the call settles. Skipping that would leave
+  // Member._abort()'s `while (this._activePoll !== null) await
+  // this._activePoll` spinning in a tight loop forever once our fix
+  // makes the promise resolve (it re-checks the condition and awaits an
+  // already-settled promise indefinitely) — an artifact of driving this
+  // internal field by hand, not a real blind-pairing behavior.
+  member._activePoll = member._addRequest(wireBytes).finally(() => {
+    if (member._activePoll !== null) member._activePoll = null
+  })
+
+  const closed = creator.close()
+  const timedOut = new Promise((resolve) => setTimeout(() => resolve('timeout'), 5000))
+  const result = await Promise.race([closed.then(() => 'closed'), timedOut])
+  t.is(result, 'closed', 'close() resolves even while a DHT-poll re-check is in flight')
+})
+
 test('approve: burning the invite rejects other pending candidates on the same invite', async function (t) {
   const { creator, joiner, tn } = await createPair(t)
   const invite = await creator.createInvite()

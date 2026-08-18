@@ -11,3 +11,4 @@
 - 2026-08-18 Task 9: receive pipeline (newest-unapplied detection, bounded blob fetch, atomic file materialization, wallpaper event + pendingWallpaper)
 - 2026-08-18 Task 10: applied acks close the loop (delivered/superseded status, send-updated events, received history)
 - 2026-08-18 Task 11: bounded sync + blob relaying; offline delivery via relay proven (sender-offline scenario)
+- 2026-08-18 Task 12: scenario matrix green (multi-target, full-restart, revocation-blocks-send); API README written; core-v0.1.0

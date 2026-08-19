@@ -1,7 +1,6 @@
 const test = require('brittle')
 const fs = require('fs')
 const path = require('path')
-const os = require('os')
 const tmp = require('test-tmp')
 const { execFile } = require('child_process')
 const { promisify } = require('util')
@@ -27,4 +26,9 @@ test('enable writes a LaunchAgent that RunAtLoad-fires, isEnabled reflects it, d
   await li.disable()
   t.absent(await li.isEnabled(), 'isEnabled false after disable')
   t.absent(fs.existsSync(path.join(dir, label + '.plist')), 'plist removed')
+})
+
+test('enable() rejects when programArguments is empty', async (t) => {
+  const li = createLoginItem({ dir: await tmp(t), label: 'com.pearwallpaper.test.empty.' + process.pid, programArguments: [] })
+  await t.exception(() => li.enable())
 })

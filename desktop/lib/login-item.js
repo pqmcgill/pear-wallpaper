@@ -7,13 +7,17 @@ const execFileP = promisify(execFile)
 
 const defaultDir = path.join(os.homedir(), 'Library', 'LaunchAgents')
 
+function xmlEscape (s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
 function plistBody (label, programArguments) {
-  const args = programArguments.map((a) => `    <string>${a}</string>`).join('\n')
+  const args = programArguments.map((a) => `    <string>${xmlEscape(a)}</string>`).join('\n')
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>${label}</string>
+  <key>Label</key><string>${xmlEscape(label)}</string>
   <key>ProgramArguments</key>
   <array>
 ${args}

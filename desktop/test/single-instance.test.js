@@ -24,3 +24,12 @@ test('a stale lock (dead pid) is reclaimed', async (t) => {
   t.ok(a.acquire(), 'reclaims stale lock')
   a.release()
 })
+
+test('a malformed lockfile (non-numeric) is reclaimed', async (t) => {
+  const dir = await tmp(t)
+  const lp = path.join(dir, 'app.lock')
+  fs.writeFileSync(lp, 'not-a-pid')
+  const a = createLock(lp)
+  t.ok(a.acquire(), 'reclaims malformed lock')
+  a.release()
+})

@@ -17,9 +17,13 @@ function createLock (lockPath) {
           return true
         } catch (err) {
           if (err.code !== 'EEXIST') throw err
-          const owner = parseInt(fs.readFileSync(lockPath, 'utf8').trim(), 10)
-          if (Number.isFinite(owner) && isAlive(owner)) return false
-          try { fs.unlinkSync(lockPath) } catch {} // stale; reclaim and retry
+          try {
+            const owner = parseInt(fs.readFileSync(lockPath, 'utf8').trim(), 10)
+            if (Number.isFinite(owner) && isAlive(owner)) return false
+            try { fs.unlinkSync(lockPath) } catch {} // stale; reclaim and retry
+          } catch {
+            // Read error (ENOENT if lock was released) — treat as gone, retry
+          }
         }
       }
       return false

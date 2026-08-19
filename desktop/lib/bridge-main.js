@@ -49,14 +49,15 @@ function createBridgeMain ({ core, platform, loginItem, engine, transport }) {
         }
       })
       // Forward core signals as state refreshes + scoped events.
-      core.on('update', pushState)
-      core.on('roster-changed', pushState)
-      core.on('send-updated', pushState)
-      core.on('wallpaper', pushState)
+      const safePushState = () => pushState().catch((err) => pushEvent('error', { message: err.message }))
+      core.on('update', safePushState)
+      core.on('roster-changed', safePushState)
+      core.on('send-updated', safePushState)
+      core.on('wallpaper', safePushState)
       core.on('pairing-request', (p) => pushEvent('candidate', p))
       core.on('error-joining', () => pushEvent('error', { message: 'auto-resume join failed; ask the creator for a fresh invite' }))
       engine.on && engine.on('error', (err) => pushEvent('error', { message: err.message }))
-      engine.on && engine.on('applied', pushState)
+      if (engine.on) engine.on('applied', safePushState)
     }
   }
 }

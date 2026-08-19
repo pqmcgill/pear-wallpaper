@@ -1,65 +1,168 @@
 # pear-wallpaper-desktop
 
-The macOS Pear desktop shell for pear-wallpaper. Boots
-`pear-wallpaper-core` (the P2P engine, in `../core`) in the Bare-hosted
-app process, and renders a `pear-electron` window/tray on top of it.
+The macOS desktop shell for pear-wallpaper. A standalone **Electron** app
+(packaged with `electron-forge`) that embeds the **`pear-runtime`** library
+for P2P over-the-air updates, and launches `pear-wallpaper-core` (the P2P
+engine, in `../core`) inside a **Bare worker** it spawns.
+
+This supersedes an earlier `pear run`/`pear-electron`-based design that
+never shipped — `pear-electron` was archived upstream and Pear CLI 3.x
+removed `pear run` out from under it (see `docs/notes/spike-pear-v3.md` and
+`docs/superpowers/specs/2026-08-19-desktop-shell-design.md` for the full
+pivot rationale).
+
+## Architecture: three tiers
+
+```
+renderer (Chromium, Preact + htm UI)
+  ⇄ contextBridge/ipcRenderer   (preload.js)
+  ⇄ Electron main               (main.js)
+  ⇄ Bare IPC                    (newline-JSON frames, lib/transport/*)
+  ⇄ Bare worker                 (worker/core-host.js)
+```
+
+- **Electron main** (`main.js`) — owns the `BrowserWindow` and `Tray`,
+  single-instance locking (`app.requestSingleInstanceLock()`),
+  launch-at-login management, app lifecycle (close-to-tray, graceful
+  shutdown), and embeds `pear-runtime` (to launch the worker and to watch
+  for OTA updates). It runs **no P2P logic** itself — it's a dumb frame
+  relay between the renderer and the worker.
+- **Bare worker** (`worker/core-host.js`) — launched via
+  `PearRuntime.run()` (which, from a plain-Node Electron host, spawns a
+  real `bare-sidecar` OS subprocess). Runs `WallpaperCore`, the background
+  sync engine, the macOS wallpaper setter, and `bridge-main` (command
+  dispatch + event forwarding) over `Bare.IPC`. The holepunch native stack
+  (`sodium-native`, `udx-native`, …) runs here on Bare's own prebuilds, so
+  packaging this app **never needs an `electron-rebuild` step**.
+- **Renderer** — the Preact + htm UI, reused verbatim from the pre-pivot
+  design, talking to `bridge-ui` over a thin `contextBridge`/`ipcRenderer`
+  transport. It holds only the latest snapshot pushed from the worker and
+  re-renders as a pure function of it.
+
+The bridge (`lib/bridge-main.js` / `ui/bridge-ui.js`) is transport-agnostic
+(`{ send, onMessage }`), so neither it nor any UI component changed across
+the pivot — only thin adapters at each hop are new
+(`lib/transport/bare-ipc.js`, `lib/transport/electron-ipc.js`), plus
+`main.js`'s relay, which just forwards frames both directions without
+parsing them.
 
 ## Layout
 
-- `index.js` — main entry (runs under Bare). Acquires the single-instance
-  lock, boots `WallpaperCore` and the sync engine, starts a `pear-bridge` +
-  `pear-electron` window pair, and wires `bridge-main` to the renderer over
-  the `runtime.start()` duplex (see `lib/pear-transport.js`).
-- `lib/` — Bare-side (CommonJS) logic: platform (wallpaper-setting),
-  login-item, single-instance lock, sync-engine, device-name, bridge-main,
-  and the main-side transport adapter.
-- `ui/` — the renderer (ESM, ordinary web APIs plus `pear-electron`'s
-  `ui` object and `pear-pipe`). `ui/index.html` loads `ui/app.js`, which
-  renders the Preact UI, builds its end of the transport
-  (`ui/pear-transport.js`), and creates the tray (`ui/tray.js` — tray setup
-  has to happen here, not in `index.js`; see that file's comment for why).
+- `main.js` — Electron main entry: window/tray/single-instance/login-item,
+  embeds `pear-runtime`, launches the worker, relays IPC frames, handles
+  graceful shutdown and OTA.
+- `preload.js` — `contextBridge`: exposes `window.bridgeTransport`
+  (`send`/`onMessage`) to the renderer.
+- `worker/core-host.js` — Bare worker entry: boots `WallpaperCore` +
+  sync-engine + `bridge-main` over `Bare.IPC`; handles the `{t:'shutdown'}`
+  control frame.
+- `lib/` — runtime-agnostic logic, reused unchanged from the pre-pivot
+  shell: `bridge-main.js`, `sync-engine.js`, `device-name.js`,
+  `login-item.js` (LaunchAgent plist write/bootstrap/bootout),
+  `platform/` (`darwin.js`'s `osascript` wallpaper setter, selected via
+  `platform/index.js`), plus `compat/` (Bare shims for `process` and
+  `child_process`, needed because Bare has no Node builtins) and
+  `transport/` (the two new adapters above). `single-instance.js` is kept
+  in-tree but retired from the boot path (Electron's own lock replaces it).
+- `ui/` — the Preact renderer (Onboarding/Waiting/MainView with
+  Devices/Send/Received/Settings tabs), reused unchanged. `ui/index.html`
+  loads `ui/app.js`.
+- `forge.config.js` — electron-forge packaging config (macOS `.app` via
+  `@electron-forge/maker-zip`, `productName: 'Pear Wallpaper'`).
 
-## Dev / run / test / stage
+## Dev / package / make / test
 
 ```bash
 cd desktop
 npm install          # sync package-lock.json against package.json
 npm test             # brittle test/*.test.js — the automated suite
-npm run dev          # == pear run --dev . — local dev, one instance
+npm run dev           # == electron-forge start — local dev, one instance,
+                      #   window opens rendering Onboarding
+npm run package       # electron-forge package — unpacked app for the
+                      #   current platform, no installer
+npm run make          # electron-forge make — produces a distributable
+                      #   .app (zip maker), under out/
 ```
 
-Two instances (for pairing/send QA) each need their own app storage —
-`pear run` takes a `--store|-s <path>` flag for this:
+Two instances (for pairing/send QA) each need their own Electron
+`userData` dir — pass the Chromium `--user-data-dir` switch (Electron
+apps honor it automatically before `app.whenReady()`; no code change
+needed, and this app's single-instance lock is scoped per `userData` dir):
 
 ```bash
-pear run --dev . --store /tmp/pw-a   # "device A"
-pear run --dev . --store /tmp/pw-b   # "device B", separate terminal
+npm run dev -- --user-data-dir=/tmp/pw-a    # "device A"
+npm run dev -- --user-data-dir=/tmp/pw-b    # "device B", separate terminal
 ```
 
-To validate anything that depends on the app's real `pear://<key>` (the
-launch-at-login LaunchAgent's `ProgramArguments` invoke `pear run
-pear://<key>`, which doesn't resolve from a `--dev` session), stage or
-release the app first:
+Launch-at-login and OTA only exercise meaningfully against a **built**
+`.app` (see `npm run make` above) — the LaunchAgent points at
+`app.getPath('exe')` and the updater only calls `applyUpdate()` when
+`app.isPackaged`. Full manual checklist, including how to run two built
+copies side by side: **`docs/notes/qa-desktop.md`**.
 
-```bash
-pear stage <channel> .      # e.g. pear stage desktop-shell .
-pear release <channel>      # promote a staged version
-```
+## OTA workflow
+
+The native Electron shell (the `.app`) is built once per Mac/arch with
+`electron-forge` and installed on the owner's Macs directly — it is
+**not** what OTA updates. On top of it, the embedded `pear-runtime`
+library provides P2P OTA for the app's JS/UI/worker bundle:
+
+1. **Mint an upgrade link once** (already done for this app — see
+   `package.json`'s `upgrade` field):
+   ```bash
+   pear touch
+   ```
+2. **After each code change**, stage the new bundle onto that link:
+   ```bash
+   pear stage <link> .
+   ```
+3. **Seed it** from one always-on machine so running instances can fetch
+   it:
+   ```bash
+   pear seed <link>
+   ```
+4. Every running app has already constructed `new PearRuntime({ upgrade,
+   ... })` in `main.js` — it watches the link in the background, downloads
+   the new bundle, and once ready fires `pear.updater`'s `'updated'` event,
+   which `main.js` forwards to the renderer as an `update-ready` bridge
+   event. Settings then shows **"Update available — restart to apply"**;
+   clicking Restart calls `pear.updater.applyUpdate()` then relaunches.
+
+The native shell only needs re-building/re-distributing for Electron- or
+native-level changes; day-to-day feature updates ride OTA. `pear-runtime`
+and `pear-runtime-updater` are explicitly experimental upstream — treat the
+OTA path as the least battle-tested part of this app (flagged further in
+`docs/notes/qa-desktop.md`'s Act 11).
 
 ## Testing split
 
 - **Automated (`npm test`)** — every module under `lib/` and `ui/` has
   brittle unit/component tests with injectable dependencies (fake `fs`,
-  fake `exec`, fake `bridge`/`core`): single-instance locking, the
-  wallpaper setter's argv-safety, the LaunchAgent plist writer, the
-  device-name resolver, the sync engine's apply/coalesce/error-surfacing
-  logic, the bridge's command/event wire protocol on both ends, and every
-  Preact component's rendering + bridge-call wiring. Current: **37/37
-  tests, 73/73 asserts, pristine** — no stray warnings, no skips.
+  fake `exec`, fake `bridge`/`core`/transport endpoints): single-instance
+  locking, the wallpaper setter's argv-safety, the LaunchAgent plist
+  writer, the device-name resolver, the sync engine's apply/coalesce/
+  error-surfacing logic, both new transport adapters
+  (`bare-ipc.js`/`electron-ipc.js`), the bridge's command/event wire
+  protocol on both ends, and every Preact component's rendering + bridge-
+  call wiring. Current: **48/48 tests, 87/87 asserts, pristine** — no
+  stray warnings, no skips.
 - **Manual (GUI/OS effects `npm test` cannot reach)** — real window
-  rendering, the `pear-pipe` IPC transport actually round-tripping across
-  the spawned Electron process, macOS's one-time Automation permission
-  prompt for the `osascript`/System Events wallpaper setter, tray
-  behavior, sleep/wake, and the LaunchAgent's real `launchctl`
-  activation against a staged build. Full checklist:
+  rendering, the renderer↔main↔worker IPC round-trip actually crossing
+  process boundaries, macOS's one-time Automation permission prompt for
+  the `osascript` wallpaper setter (now invoked from inside the Bare
+  worker), tray behavior, close-to-tray backgrounding, sleep/wake,
+  single-instance focus, the LaunchAgent's real `launchctl` activation
+  against a built `.app`, and the full OTA cycle (`pear touch`/`stage`/
+  `seed` → detect → apply on relaunch). Full checklist:
   **[`docs/notes/qa-desktop.md`](../docs/notes/qa-desktop.md)**.
+
+## Known limitations
+
+- `ui/components/Send.js`'s file-path resolution for the Send tab's
+  browse/drag-drop still falls back to a `pear-electron` dynamic import
+  that no longer resolves (that dependency was removed in the pivot) —
+  on Electron builds where `File#path` is undefined (Electron ≥32, which
+  this app pins to), both picking and dropping a file are degraded. Needs
+  `webUtils.getPathForFile` wired through `preload.js`/`main.js`. See
+  `docs/notes/qa-desktop.md`'s note at the top and the JOURNAL's pivot
+  entry.

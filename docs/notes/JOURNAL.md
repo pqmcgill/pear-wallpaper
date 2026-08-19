@@ -94,3 +94,119 @@
   receive with the macOS Automation prompt, background/tray delivery while
   the window is hidden, sleep/wake, launch-at-login against a staged
   build, revocation, and offline re-apply.
+
+## Plan 2 pivot: Pear→Electron+pear-runtime
+
+- 2026-08-19 Pivot rationale (spike: `docs/notes/spike-pear-v3.md`): the
+  Task 12 shell above never actually ran. `holepunchto/pear-electron` was
+  archived (read-only) 2026-04-27 — no further releases — and Pear CLI
+  `3.2.0` **removed `pear run`** entirely (`pear run .` now errors
+  "Use the pear-runtime module instead"), which pear-electron's own
+  dev-loop and even its own build/release scripts depend on. `pear build`
+  is also a dead end: it injects a staged project into a pre-existing
+  native app shell that pear-electron's now-defunct `bootstrap`/`decal`
+  tooling used to produce, and there's no working path to that shell
+  today. The CLI's own removal message, and the `hello-pear-electron`
+  template it points to, name the actual v3-supported shape: a plain
+  Electron app (packaged with `electron-forge`) that embeds the
+  **`pear-runtime`** library directly for P2P OTA + Bare workers. Spec
+  revised accordingly: `docs/superpowers/specs/2026-08-19-desktop-shell-design.md`
+  (supersedes the Task 12-era §3.2 spec where they differ).
+- 2026-08-19 New three-tier architecture (design spec §2, built Tasks 1–7 on
+  branch `desktop-shell-electron-conversion`): **Electron main process**
+  (`main.js`) owns the `BrowserWindow`/`Tray`/single-instance/login-item and
+  embeds `pear-runtime`, but runs **no P2P logic** — it's a dumb frame
+  relay. **Bare worker** (`worker/core-host.js`), launched via
+  `PearRuntime.run()`, runs `WallpaperCore`, the sync engine, the wallpaper
+  setter, and `bridge-main` over `Bare.IPC` — the holepunch native stack
+  lives here, on Bare's own prebuilds. **Preact renderer** (unchanged UI)
+  talks to the worker over `contextBridge`/`ipcRenderer` via `preload.js`,
+  through the main-process relay. Message path: `renderer ⇄ (contextBridge/
+  ipcRenderer) ⇄ Electron main (relay) ⇄ (Bare IPC, newline-JSON frames) ⇄
+  worker (bridge-main + core)`.
+- 2026-08-19 Key discoveries (full citation trails in
+  `.superpowers/sdd/2026-08-19-desktop-shell-electron-conversion/task-{2,3,6}-report.md`):
+  - `PearRuntime.run()` from a plain-Node Electron main resolves to
+    `bare-sidecar`'s `Sidecar` — a **real OS subprocess** running the
+    bundled `bare` binary, wired to an fd-3 IPC pipe; the worker's global
+    `Bare.IPC` is the other end. This meant the core (and its native deps —
+    `sodium-native`, `udx-native`, …) run unmodified on **Bare's own
+    prebuilds**, so the pivot needs **no `electron-rebuild`** step at all.
+  - Bare has **no Node builtins** (`fs`/`path`/`os`/`child_process`/`util`
+    all fail to resolve, and there's no global `process`). Fixed without
+    touching any reused module: `package.json`'s `"imports"` field remaps
+    those specifiers to `bare-*` equivalents (mirroring the trick
+    `core/package.json` already used for `fs`/`path`), plus two new
+    `lib/compat/{process,child_process}.js` shims — the `child_process` one
+    wraps `bare-subprocess`'s `spawn` to fake `execFile`'s callback shape
+    for `login-item.js` and `darwin.js`.
+  - Config (storageDir/exePath) travels via **argv**, not `opts` —
+    `bare-sidecar`'s `Sidecar` constructor doesn't read `opts` at all,
+    confirmed against the installed package.
+  - Graceful shutdown needed a **message-level** control frame
+    (`{ t: 'shutdown' }`), because `workerPipe.destroy()` SIGTERMs the bare
+    process with no JS-visible worker-side event, and `.end()` only
+    half-closes and never reaches process exit — both confirmed empirically
+    with a throwaway harness. `main.js` sends the frame on `before-quit`,
+    waits (2s fallback) for the worker's `exit`, then force-destroys.
+  - OTA rides a **separate** `pear-runtime` capability from the static
+    `.run()` used for the worker: `new PearRuntime(opts).updater` (a
+    `pear-runtime-updater` instance) — its constructor eagerly opens a
+    Corestore and **joins a Hyperswarm DHT swarm** even under plain
+    `npm run dev`, watching the `upgrade` link for updates; `applyUpdate()`
+    only actually swaps the bundle when `opts.bundled`/`app.isPackaged`.
+  - The transport-agnostic bridge design (`bridge-main`/`bridge-ui`'s
+    `{send, onMessage}` contract) paid off exactly as intended across the
+    pivot: neither module, nor any UI component, nor their tests, needed
+    editing — only two new thin adapters (`lib/transport/bare-ipc.js`,
+    `lib/transport/electron-ipc.js`) and the main-process relay were new.
+- 2026-08-19 Reused unchanged: `lib/bridge-main.js`, `lib/sync-engine.js`,
+  `lib/device-name.js`, `lib/login-item.js`, `lib/platform/*`, and the
+  entire `ui/` tree (Preact components + their tests) — all of Plan 2's
+  Task 1–11 logic and tests survived the pivot untouched. Rewritten/new:
+  boot (`main.js` replaces the old Bare-main `index.js`; `worker/
+  core-host.js` is new), transport (`lib/transport/bare-ipc.js`,
+  `lib/transport/electron-ipc.js`, `preload.js`), tray (moved into
+  `main.js` — Electron's `Tray` API, not the old renderer-side
+  `ui/tray.js`), single-instance (Electron's
+  `app.requestSingleInstanceLock()` replaces the pidfile-based
+  `lib/single-instance.js`, which is kept in-tree but retired from the
+  boot path), login-item target (built `.app` executable path instead of
+  a `pear://<key>` link), and OTA (new — `pear-runtime`/`pear-runtime-updater`
+  wiring in `main.js`, `updateReady` plumbed into `ui/app.js` and
+  `ui/components/Settings.js`). Dead files from the old topology
+  (`index.js`, `lib/pear-transport.js`, `ui/pear-transport.js`) deleted;
+  nothing imports them.
+- 2026-08-19 Deferred/carried to the final fix wave (not fixed in this
+  docs-only task — see
+  `.superpowers/sdd/2026-08-19-desktop-shell-electron-conversion/progress.md`):
+  (a) `ui/components/Send.js`'s `resolveFilePath` still does a live
+  `await import('pear-electron')` as its `File.path` fallback, but
+  `pear-electron` was removed as a dependency in Task 1 — on any Electron
+  build where `File#path` is undefined (Electron ≥32; this app pins
+  `electron@^33`), both browse and drag-drop in the Send tab are broken
+  (caught, surfaced as an error banner, doesn't crash); the real fix is
+  `webUtils.getPathForFile` via a preload→main IPC round-trip. (b)
+  `pear.updater` has no `'error'` listener wired with real handling beyond
+  a `console.error` — matches the upstream example but a zero-listener
+  EventEmitter emitting `'error'` has bitten this project before; a
+  one-liner for the fix wave. (c) OTA is exercised against
+  `pear-runtime-updater`, which self-describes as "VERY EXPERIMENTAL, MOST
+  DEFINITELY WILL CHANGE," and its `applyUpdate()` deployment-folder layout
+  (`/by-arch/<platform-arch>/app/<name>`) is unverified against a real
+  `pear stage` of this app's own `npm run make` output. (d) the
+  `osascript`/`launchctl` success paths, now running through the
+  `bare-subprocess`-backed `child_process` compat shim inside the Bare
+  worker, have only had their **failure** branch (a `launchctl print` miss)
+  exercised end-to-end — the success paths are must-smoke items in
+  `docs/notes/qa-desktop.md`.
+- 2026-08-19 Task 8 (final): full automated suite **48/48 tests, 87/87
+  asserts, pristine** (`cd desktop && npm test`) — the reused 37/37 suite
+  plus Task 7's new adapter tests. `docs/notes/qa-desktop.md` rewritten
+  end-to-end for this architecture (Electron boot, IPC round-trip via
+  DevTools, two-instance setup via `--user-data-dir`, pairing, send both
+  directions with the known Send.js caveat, the osascript/launchctl
+  must-smoke, close-to-tray background delivery, sleep/wake, tray menu,
+  single-instance, launch-at-login against a built `.app`, OTA must-smoke,
+  revoke, offline re-apply); `desktop/README.md` rewritten for Electron
+  dev/package/make and the new testing split.

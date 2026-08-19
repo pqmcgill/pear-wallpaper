@@ -55,10 +55,10 @@ function createTray () {
     // let it through, then app.quit() triggers the before-quit handler below
     // (Task 3) which sends the worker a `{t:'shutdown'}` frame and waits for
     // it to tear down core/engine before the app process actually exits.
-    // The renderer/tray must NOT call the bridge `quit` command — bridge-main's
-    // `quit` calls a nonexistent `Pear.exit(0)` in this topology (dead code
-    // left over from the pear-runtime UI process shape; not reachable from
-    // here and not fixed here, see task-3/task-4 notes).
+    // The renderer/tray must NOT call a bridge `quit` command — there isn't
+    // one (final-review fix wave removed bridge-main's dead `quit` entry,
+    // which called a nonexistent `Pear.exit(0)` left over from the
+    // pre-Electron-conversion pear-runtime UI process shape).
     { label: 'Quit', click: () => { app.isQuitting = true; app.quit() } }
   ])
   tray.setToolTip('Pear Wallpaper')
@@ -192,6 +192,15 @@ app.whenReady().then(() => {
       bundled: app.isPackaged
     })
     pear.on('error', (err) => console.error('[pear-wallpaper] pear-runtime updater error', err))
+    // BLOCKER fix (final-review): pear.updater is a SEPARATE EventEmitter from
+    // `pear` (pear-runtime-updater@3.4.0, not forwarded onto `pear`) and emits
+    // its own 'error' events. With zero listeners, Node's EventEmitter throws
+    // on an unhandled 'error' emit, crashing the main process — and this app
+    // joins the OTA DHT swarm every boot (see the `new PearRuntime(...)` above),
+    // so updater errors are a real, not hypothetical, risk. Guarded for
+    // `pear.updater` existing (it's created by the constructor above, but stay
+    // defensive) and wired before any update activity below.
+    if (pear.updater) pear.updater.on('error', (err) => console.error('[pear-wallpaper] updater error', err))
     pear.updater.on('updated', () => {
       console.log('[pear-wallpaper] update downloaded and ready, version', pear.updater.nextVersion)
       if (win) win.webContents.send('bridge:to-renderer', { t: 'evt', event: 'update-ready', payload: {} })

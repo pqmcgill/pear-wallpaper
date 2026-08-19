@@ -1,3 +1,4 @@
+/* global Pear */
 function createBridgeMain ({ core, platform, loginItem, engine, transport }) {
   async function snapshot () {
     const inGroup = core.groupStatus === 'member'
@@ -29,7 +30,11 @@ function createBridgeMain ({ core, platform, loginItem, engine, transport }) {
       await platform.setWallpaper(item.filePath)
     },
     syncNow: () => engine.syncNow(),
-    setLoginAtLogin: (on) => (on ? loginItem.enable() : loginItem.disable())
+    setLoginAtLogin: (on) => (on ? loginItem.enable() : loginItem.disable()),
+    // Tray "Quit" (ui/tray.js) has no direct access to core/engine, so it
+    // calls back through here. Pear.exit runs Pear.teardown() first, which
+    // is where engine.stop()/lock.release()/core.close() happen (index.js).
+    quit: () => Pear.exit(0)
   }
 
   function pushEvent (event, payload) { transport.send({ t: 'evt', event, payload }) }

@@ -25,5 +25,10 @@ export function Settings ({ bridge, snapshot }) {
         onChange=${(e) => setLoginAtLogin(e.target.checked)} /> Launch at login</label>
       <p>Last synced: <span class="last-sync">${lastSync}</span></p>
       ${toggleError && html`<p class="error">${toggleError}</p>`}
+      ${snapshot.updateReady && html`
+        <p class="update-ready">
+          Update available — restart to apply
+          <button onClick=${() => bridge.call('restartToUpdate')}>Restart</button>
+        </p>`}
     </section>`
 }

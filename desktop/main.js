@@ -2,6 +2,7 @@
 const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, powerMonitor } = require('electron')
 const path = require('path')
 const PearRuntime = require('pear-runtime')
+const pkg = require('./package.json')
 
 // Single instance: a second launch should focus the existing window instead
 // of spawning a second worker/core alongside the first. Must be checked
@@ -86,6 +87,72 @@ function createTray () {
 // `createWindow()` can't leave an orphaned worker process behind it).
 let workerPipe = null
 
+// OTA (Task 6): `pear.updater` is a SEPARATE capability of the same
+// pear-runtime@1.3.1 package from the static `PearRuntime.run()` used
+// above. Launching the worker needs no instance at all (Task 2); watching
+// for updates needs a full `new PearRuntime(opts)` instance — its
+// constructor eagerly creates a Corestore and (in `_open()`) joins a
+// Hyperswarm DHT swarm to replicate the `opts.upgrade` link's Hyperdrive
+// (node_modules/pear-runtime/index.js:13-42). That instance exposes
+// `.updater`, a `pear-runtime-updater@3.4.0` instance
+// (node_modules/pear-runtime-updater/index.js) which is the actual OTA
+// state machine: it requires `dir`/`upgrade`/`name`/`store` (throws
+// otherwise, index.js:18-21), emits `update-scheduled` -> `updating` ->
+// `updating-delta`/`updating-progress` -> `updated`, and exposes
+// `await updater.applyUpdate()` to atomically swap the installed bundle
+// for the staged one (only once `updater.updated` is true and
+// `opts.bundled` — i.e. only for a packaged app, index.js:94-113). See
+// task-6-report.md for the full citation trail and the `opts.name`
+// discrepancy between pear-runtime's and pear-runtime-updater's own docs.
+let pear = null
+
+// Per pear-runtime-updater/index.js:94-98's `applyUpdate()`, the staged
+// build is looked up at `<staged>/by-arch/<platform>-<arch>/app/<name>` —
+// `<name>` must be the packaged bundle's actual filename WITH extension
+// (`.app` / `.exe` / `.msix` / `.AppImage`), not just productName (contrary
+// to pear-runtime/README.md's simplified example comment "opts.name - The
+// package.json productName of the app" — the updater's own code and its
+// own README ("Application name with extension") are authoritative since
+// `new PearRuntime(opts)` passes `opts` straight through to
+// `new PearRuntimeUpdater(opts)`, index.js:25).
+function updaterAppName () {
+  if (process.platform === 'darwin') return `${pkg.productName}.app`
+  if (process.platform === 'win32') return `${pkg.productName}.exe`
+  return `${pkg.productName}.AppImage`
+}
+
+// Per pear-runtime/README.md's "Usage" example `getAppPath()`: path to the
+// installed bundle, passed as `opts.app` so `applyUpdate()` knows what to
+// swap. `null` (and thus `bundled: false` below) when unpackaged, so the
+// updater never tries to watch/apply against a nonexistent bundle path
+// during `npm run dev`.
+function getAppBundlePath () {
+  if (!app.isPackaged) return null
+  if (process.platform === 'linux' && process.env.APPIMAGE) return process.env.APPIMAGE
+  if (process.platform === 'win32') return process.execPath
+  return path.join(process.resourcesPath, '..', '..')
+}
+
+// `restartToUpdate` is a main-process-only action (`app.relaunch`/`app.quit`)
+// — the Bare worker has no relaunch capability, so this must never reach
+// it. Routed through the *same* `bridge.call('restartToUpdate')` surface
+// Settings.js already uses for other calls (see the `ipcMain.on(
+// 'bridge:to-main', ...)` handler below, which intercepts this one cmd
+// before it would otherwise be forwarded verbatim to workerPipe) rather
+// than adding a second ipcRenderer channel/preload method — one relay to
+// reason about, and Settings.js's existing `bridge.call(...)` pattern
+// (see setLoginAtLogin) is reused unchanged.
+async function restartToUpdate (evt, msg) {
+  try {
+    if (pear && pear.updater && pear.updater.updated) await pear.updater.applyUpdate()
+    app.relaunch()
+    app.quit()
+  } catch (err) {
+    console.error('[pear-wallpaper] restartToUpdate failed', err)
+    if (evt && evt.sender) evt.sender.send('bridge:to-renderer', { t: 'res', id: msg.id, ok: false, error: err.message })
+  }
+}
+
 app.whenReady().then(() => {
   // Menu-bar app: no dock icon, tray is the only chrome while backgrounded.
   if (app.dock) app.dock.hide()
@@ -111,6 +178,28 @@ app.whenReady().then(() => {
     }
   })
 
+  // OTA: construct the updater instance. Guarded — a network/updater
+  // failure here (e.g. offline, sandboxed CI, no DHT reachable) must never
+  // block worker launch or window creation, which have already happened
+  // above by the time this could realistically fail.
+  try {
+    pear = new PearRuntime({
+      dir: storageDir,
+      version: pkg.version,
+      upgrade: pkg.upgrade,
+      name: updaterAppName(),
+      app: getAppBundlePath(),
+      bundled: app.isPackaged
+    })
+    pear.on('error', (err) => console.error('[pear-wallpaper] pear-runtime updater error', err))
+    pear.updater.on('updated', () => {
+      console.log('[pear-wallpaper] update downloaded and ready, version', pear.updater.nextVersion)
+      if (win) win.webContents.send('bridge:to-renderer', { t: 'evt', event: 'update-ready', payload: {} })
+    })
+  } catch (err) {
+    console.error('[pear-wallpaper] pear-runtime updater init failed', err)
+  }
+
   createWindow()
 
   // Wake-from-sleep: the OS can leave the sync engine's own timers stale
@@ -123,7 +212,10 @@ app.whenReady().then(() => {
     if (workerPipe) workerPipe.write(Buffer.from(JSON.stringify({ t: 'req', id: -2, cmd: 'syncNow', args: [] }) + '\n'))
   })
 })
-ipcMain.on('bridge:to-main', (_evt, msg) => { if (workerPipe) workerPipe.write(Buffer.from(JSON.stringify(msg) + '\n')) })
+ipcMain.on('bridge:to-main', (evt, msg) => {
+  if (msg && msg.cmd === 'restartToUpdate') { restartToUpdate(evt, msg); return }
+  if (workerPipe) workerPipe.write(Buffer.from(JSON.stringify(msg) + '\n'))
+})
 
 // No window-all-closed→quit: this is a menu-bar-resident app (close-to-tray,
 // see createWindow's win.on('close', ...) above), so hiding the last window
@@ -144,6 +236,12 @@ app.on('before-quit', (event) => {
   if (shuttingDown || !workerPipe) return
   shuttingDown = true
   event.preventDefault()
+  // Per pear-runtime/README.md: "be sure to await pear.close() during
+  // process teardown". Fired off without blocking the existing worker
+  // shutdown timeout below (which already bounds total quit time to 2s) —
+  // it tears down the updater's swarm/store, but nothing downstream depends
+  // on it finishing before the process exits.
+  if (pear) pear.close().catch((err) => console.error('[pear-wallpaper] pear-runtime updater close failed', err))
   const finish = () => { try { workerPipe.destroy() } catch { /* already closed */ } app.exit() }
   const timer = setTimeout(finish, 2000)
   workerPipe.once('exit', () => { clearTimeout(timer); app.exit() })

@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "commonjs",
   "main": "main.js",
+  "upgrade": "pear://fi59t69fhb7dcbuqzhd8rqci9ikyp3pkuq7gj4sjhmjhbmhjkyto",
   "scripts": {
     "start": "electron-forge start",
     "dev": "electron-forge start",

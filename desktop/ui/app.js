@@ -52,6 +52,14 @@ bridge.on('error', (e) => {
   if (snapshot.groupStatus === 'joining') snapshot = { ...snapshot, joinError: e.message }
   draw()
 })
+// OTA (Task 6): main.js forwards pear-runtime-updater's 'updated' event as
+// this bridge evt once a downloaded update is staged and ready to apply.
+// Threaded into the snapshot so Settings can show the restart affordance;
+// actually applying/relaunching is a main-process-only action (see
+// Settings.js's restartToUpdate call and main.js's ipcMain interception —
+// it never reaches the worker).
+bridge.on('update-ready', () => { snapshot = { ...snapshot, updateReady: true }; draw() })
+
 bridge.call('getState').then((s) => { snapshot = { ...snapshot, ...s }; draw() })
   .catch((err) => { snapshot = { ...snapshot, lastError: err.message }; draw() })
 draw()

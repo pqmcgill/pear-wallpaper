@@ -1,0 +1,29 @@
+{
+  "name": "pear-wallpaper-desktop",
+  "version": "0.1.0",
+  "type": "commonjs",
+  "main": "index.js",
+  "pear": {
+    "name": "pear-wallpaper",
+    "type": "desktop",
+    "pre": "pear-electron/pre",
+    "gui": { "main": "ui/index.html", "width": 480, "height": 660, "closeHides": true }
+  },
+  "scripts": {
+    "test": "brittle test/*.test.js",
+    "dev": "pear run --dev ."
+  },
+  "dependencies": {
+    "pear-wallpaper-core": "file:../core",
+    "pear-electron": "^1",
+    "pear-bridge": "^1",
+    "preact": "^10.24.0",
+    "htm": "^3.1.1",
+    "@paulmillr/qr": "^0.2.1"
+  },
+  "devDependencies": {
+    "brittle": "^3.19.0",
+    "preact-render-to-string": "^6.5.0",
+    "test-tmp": "^1.4.0"
+  }
+}

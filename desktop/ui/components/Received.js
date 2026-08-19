@@ -20,7 +20,7 @@ export function Received ({ bridge, snapshot }) {
       <ul>
         ${(snapshot.received || []).map((r) => html`
           <li key=${r.id}>
-            <img src=${'file://' + r.filePath} alt="" width="120" />
+            <img src=${'file://' + encodeURI(r.filePath)} alt="" width="120" />
             <span>${(r.meta && r.meta.filename) || r.id}</span>
             <button onClick=${() => reapply(r.id)}>Re-apply</button>
           </li>`)}

@@ -9,6 +9,14 @@ test('Onboarding renders create + join controls', async (t) => {
   t.ok(/join/i.test(html), 'has a join control')
 })
 
+test('Onboarding create control renders without a createError when bridge.call succeeds', async (t) => {
+  const { render } = await import('preact-render-to-string')
+  const { h } = await import('preact')
+  const { Onboarding } = await import('../ui/components/Onboarding.js')
+  const html = render(h(Onboarding, { bridge: { call: async () => 'INVITE-XYZ' } }))
+  t.absent(/create-error/.test(html))
+})
+
 test('qrSvg returns an <svg> string for an invite', async (t) => {
   const { qrSvg } = await import('../ui/qr.js')
   const svg = qrSvg('INVITE-ABC')

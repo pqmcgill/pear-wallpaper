@@ -15,12 +15,15 @@ export function Settings ({ bridge, snapshot }) {
     }
   }
 
+  const lastSync = snapshot.lastSync ? new Date(snapshot.lastSync).toLocaleString() : 'never'
+
   return html`
     <section class="settings">
       <p>Device name: <strong>${snapshot.deviceName}</strong> <small>(edit device-name.txt before joining to change)</small></p>
       <p>Device key: <code>${snapshot.deviceKey}</code></p>
       <label><input type="checkbox" checked=${!!snapshot.loginAtLogin}
         onChange=${(e) => setLoginAtLogin(e.target.checked)} /> Launch at login</label>
+      <p>Last synced: <span class="last-sync">${lastSync}</span></p>
       ${toggleError && html`<p class="error">${toggleError}</p>`}
     </section>`
 }

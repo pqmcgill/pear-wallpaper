@@ -1,5 +1,20 @@
 const test = require('brittle')
 
+test('resolveFilePath returns file.path directly when present', async (t) => {
+  const { resolveFilePath } = await import('../ui/components/Send.js')
+  t.is(await resolveFilePath({ path: '/tmp/pic.jpg' }), '/tmp/pic.jpg')
+})
+
+test('resolveFilePath falls back to null when file.path is absent and pear-electron is unreachable (e.g. under test/plain Node)', async (t) => {
+  const { resolveFilePath } = await import('../ui/components/Send.js')
+  t.is(await resolveFilePath({ name: 'pic.jpg' }), null)
+})
+
+test('resolveFilePath returns null for a falsy file', async (t) => {
+  const { resolveFilePath } = await import('../ui/components/Send.js')
+  t.is(await resolveFilePath(null), null)
+})
+
 test('Send lists targetable devices (excludes self) and disables send with none chosen', async (t) => {
   const { render } = await import('preact-render-to-string')
   const { h } = await import('preact')

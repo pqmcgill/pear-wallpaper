@@ -21,11 +21,19 @@ function friendlyJoinError (message) {
 
 export function Onboarding ({ bridge }) {
   const [invite, setInvite] = useState(null)
+  const [createError, setCreateError] = useState(null)
   const [joinValue, setJoinValue] = useState('')
   const [joining, setJoining] = useState(false)
   const [joinError, setJoinError] = useState(null)
 
-  const create = async () => { setInvite(await bridge.call('createGroup').then(() => bridge.call('createInvite'))) }
+  const create = async () => {
+    setCreateError(null)
+    try {
+      setInvite(await bridge.call('createGroup').then(() => bridge.call('createInvite')))
+    } catch (err) {
+      setCreateError(err.message)
+    }
+  }
 
   const join = async () => {
     setJoinError(null)
@@ -49,6 +57,7 @@ export function Onboarding ({ bridge }) {
             <code>${invite}</code>
             <div class="qr" dangerouslySetInnerHTML=${{ __html: qrSvg(invite) }}></div>
           </div>`}
+        ${createError && html`<p class="create-error">${createError}</p>`}
       </div>
       <div class="join">
         <input placeholder="Paste invite" value=${joinValue} onInput=${(e) => setJoinValue(e.target.value)} disabled=${joining} />

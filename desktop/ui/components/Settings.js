@@ -15,6 +15,18 @@ export function Settings ({ bridge, snapshot }) {
     }
   }
 
+  // Minor fix (final-review): on the error path main replies `ok:false`
+  // (see main.js's restartToUpdate catch block), which makes bridge-ui's
+  // call() promise reject. With no .catch here that was an unhandled
+  // rejection. Surface it the same way the other toggle on this screen
+  // does, via the existing error banner state.
+  const restartToUpdate = () => {
+    bridge.call('restartToUpdate').catch((err) => {
+      console.error('[pear-wallpaper] restartToUpdate failed', err)
+      setToggleError(err.message)
+    })
+  }
+
   const lastSync = snapshot.lastSync ? new Date(snapshot.lastSync).toLocaleString() : 'never'
 
   return html`
@@ -28,7 +40,7 @@ export function Settings ({ bridge, snapshot }) {
       ${snapshot.updateReady && html`
         <p class="update-ready">
           Update available — restart to apply
-          <button onClick=${() => bridge.call('restartToUpdate')}>Restart</button>
+          <button onClick=${restartToUpdate}>Restart</button>
         </p>`}
     </section>`
 }

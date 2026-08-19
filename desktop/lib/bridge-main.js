@@ -1,4 +1,3 @@
-/* global Pear */
 function createBridgeMain ({ core, platform, loginItem, engine, transport }) {
   async function snapshot () {
     const inGroup = core.groupStatus === 'member'
@@ -30,11 +29,14 @@ function createBridgeMain ({ core, platform, loginItem, engine, transport }) {
       await platform.setWallpaper(item.filePath)
     },
     syncNow: () => engine.syncNow(),
-    setLoginAtLogin: (on) => (on ? loginItem.enable() : loginItem.disable()),
-    // Tray "Quit" (ui/tray.js) has no direct access to core/engine, so it
-    // calls back through here. Pear.exit runs Pear.teardown() first, which
-    // is where engine.stop()/lock.release()/core.close() happen (index.js).
-    quit: () => Pear.exit(0)
+    setLoginAtLogin: (on) => (on ? loginItem.enable() : loginItem.disable())
+    // NOTE (final-review fix wave): a `quit` command used to live here
+    // (`() => Pear.exit(0)`), left over from the pre-Electron-conversion
+    // pear-runtime UI process shape. `Pear` is not a global in this Bare
+    // worker topology, it had no caller, and quit is handled entirely in
+    // Electron main (main.js's tray "Quit" -> app.isQuitting = true;
+    // app.quit() -> before-quit sends `{ t: 'shutdown' }` to this worker).
+    // Removed as dead code.
   }
 
   function pushEvent (event, payload) { transport.send({ t: 'evt', event, payload }) }

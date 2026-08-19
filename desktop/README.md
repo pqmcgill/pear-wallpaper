@@ -19,21 +19,47 @@ app process, and renders a `pear-electron` window/tray on top of it.
   (`ui/pear-transport.js`), and creates the tray (`ui/tray.js` — tray setup
   has to happen here, not in `index.js`; see that file's comment for why).
 
-## Scripts
+## Dev / run / test / stage
 
-- `npm test` — runs `brittle test/*.test.js`.
-- `npm run dev` / `pear run --dev .` — boots the app for local
-  development.
-
-## Manual smoke (OS effects — not automated; see task-9-report.md for the
-full deferred checklist)
-
-```
+```bash
 cd desktop
-pear run --dev .
+npm install          # sync package-lock.json against package.json
+npm test             # brittle test/*.test.js — the automated suite
+npm run dev          # == pear run --dev . — local dev, one instance
 ```
 
-Expected: a window opens to Onboarding (`groupStatus: 'none'`), a tray
-icon appears with Open/Sync now/Quit, closing the window hides it instead
-of quitting (`pear.gui.closeHides`), and a second `pear run` while one is
-up refuses via the single-instance lock.
+Two instances (for pairing/send QA) each need their own app storage —
+`pear run` takes a `--store|-s <path>` flag for this:
+
+```bash
+pear run --dev . --store /tmp/pw-a   # "device A"
+pear run --dev . --store /tmp/pw-b   # "device B", separate terminal
+```
+
+To validate anything that depends on the app's real `pear://<key>` (the
+launch-at-login LaunchAgent's `ProgramArguments` invoke `pear run
+pear://<key>`, which doesn't resolve from a `--dev` session), stage or
+release the app first:
+
+```bash
+pear stage <channel> .      # e.g. pear stage desktop-shell .
+pear release <channel>      # promote a staged version
+```
+
+## Testing split
+
+- **Automated (`npm test`)** — every module under `lib/` and `ui/` has
+  brittle unit/component tests with injectable dependencies (fake `fs`,
+  fake `exec`, fake `bridge`/`core`): single-instance locking, the
+  wallpaper setter's argv-safety, the LaunchAgent plist writer, the
+  device-name resolver, the sync engine's apply/coalesce/error-surfacing
+  logic, the bridge's command/event wire protocol on both ends, and every
+  Preact component's rendering + bridge-call wiring. Current: **37/37
+  tests, 73/73 asserts, pristine** — no stray warnings, no skips.
+- **Manual (GUI/OS effects `npm test` cannot reach)** — real window
+  rendering, the `pear-pipe` IPC transport actually round-tripping across
+  the spawned Electron process, macOS's one-time Automation permission
+  prompt for the `osascript`/System Events wallpaper setter, tray
+  behavior, sleep/wake, and the LaunchAgent's real `launchctl`
+  activation against a staged build. Full checklist:
+  **[`docs/notes/qa-desktop.md`](../docs/notes/qa-desktop.md)**.

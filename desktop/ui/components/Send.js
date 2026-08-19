@@ -9,35 +9,35 @@ const html = htm.bind(h)
 // `e.dataTransfer.files[0].path`. Both converge on setFilePath.
 //
 // Electron v32 removed the synchronous `File#path` (replaced by
-// `webUtils.getPathForFile(file)`), so `.path` may now be undefined. This
-// module can't statically `import { webUtils } from 'electron'` or
-// `import ui from 'pear-electron'`, because pear-electron's entrypoint
-// (node_modules/pear-electron/index.js) reads the global `Pear`, which
-// only exists inside the real Pear runtime — a static import would throw
-// at module-load time under plain Node (i.e. in this project's brittle
-// tests). Instead resolveFilePath dynamically imports 'pear-electron' and
-// falls back to null if that fails (not running under Pear) or if the
-// host doesn't expose the call, so callers can show the Send error state
-// instead of sending a null filePath. pear-electron re-exposes Electron's
-// webUtils.getPathForFile as `ui.media.getPathForFile` — see
-// node_modules/pear-electron/api.js's `media.getPathForFile`, which wraps
-// `ipc.getPathForFile(file)`. This has not been smoke-tested against a
-// real Electron v32+ File object end-to-end; it is the mechanism the
-// pear-electron API surface provides for this exact purpose, matched by
-// name to Electron's own `webUtils.getPathForFile`, but flag it for a
-// manual smoke pass (drag-drop and browse, on a build where `.path` is
-// actually undefined) before relying on it in the field.
-export async function resolveFilePath (file) {
+// `webUtils.getPathForFile(file)`), so `.path` may now be undefined.
+// `webUtils` itself is only reachable via `require('electron')`, which
+// this renderer can't do directly (contextIsolation: true, nodeIntegration:
+// false) — and the previous fix-attempt here (`await import('pear-electron')`)
+// always failed once Task 1 dropped that dependency, silently degrading
+// browse/drag-drop to the error banner on any Electron >=32 build (this
+// repo pins electron@^33). Fixed properly: preload.js requires 'electron'
+// (preload runs with that privilege) and exposes
+// `window.pathForFile = (file) => webUtils.getPathForFile(file)` via
+// contextBridge. The renderer's File object (from the <input> change event
+// or the drop event) is passed straight through that bridge call — File/
+// Blob objects are one of the value types contextBridge passes by
+// reference rather than structured-cloning, which is what makes this work
+// despite contextIsolation. `getPathForFile` is synchronous, so no promise
+// round-trip is needed. Not smoke-tested against a real Electron File
+// object end-to-end in this pass (headless test env has no such object);
+// flagged as a manual smoke item (drag-drop and browse) before relying on
+// it in the field — see docs/notes/qa-desktop.md Act 3.
+export function resolveFilePath (file) {
   if (!file) return null
   if (file.path) return file.path
   try {
-    const { default: ui } = await import('pear-electron')
-    if (ui && ui.media && typeof ui.media.getPathForFile === 'function') {
-      const resolved = await ui.media.getPathForFile(file)
+    if (typeof window !== 'undefined' && typeof window.pathForFile === 'function') {
+      const resolved = window.pathForFile(file)
       if (resolved) return resolved
     }
   } catch (_err) {
-    // Not running under the Pear runtime, or getPathForFile unavailable.
+    // Not running under Electron's preload bridge, or getPathForFile
+    // rejected the value (e.g. not a real File object).
   }
   return null
 }

@@ -30,18 +30,18 @@ swarm for OTA (joined the moment `new PearRuntime()` constructs in `main.js`
 > `getAppBundlePath()`/`bundled: app.isPackaged`). Don't expect either to do
 > anything under `npm run dev`.
 
-> **Known carried defect (fix wave, not this task):** `ui/components/Send.js`'s
-> `resolveFilePath` falls back to `await import('pear-electron')` when
-> `file.path` is absent, but Task 1 removed `pear-electron` as a dependency —
-> that dynamic import now always rejects, so on any Electron build where
-> `File#path` is undefined (Electron ≥32; this repo pins `electron@^33`),
-> **both browse and drag-drop in the Send tab are broken** (the UI catches
-> the rejection and shows the "Could not read a path for that file" error
-> banner rather than crashing — see `Send.js`'s `pickFile`). The real fix is
-> `webUtils.getPathForFile` via a preload→main IPC round-trip (`webUtils` is
-> main-process-only). Act 3 below is written so you re-run it once that fix
-> lands, not to be a false-negative right now — if it fails today, that's
-> this known defect, not a new bug.
+> **Fixed (final-review fix wave):** `ui/components/Send.js`'s
+> `resolveFilePath` used to fall back to `await import('pear-electron')`
+> when `file.path` is absent, but Task 1 had removed `pear-electron` as a
+> dependency — that dynamic import always rejected, so on any Electron
+> build where `File#path` is undefined (Electron ≥32; this repo pins
+> `electron@^33`), both browse and drag-drop in the Send tab were broken.
+> Now fixed via `webUtils.getPathForFile`, exposed to the renderer as
+> `window.pathForFile` by `preload.js` (preload can `require('electron')`
+> and see `webUtils`; the renderer's actual `File` object is passed
+> straight through the contextBridge call). This has **not** been
+> smoke-tested against a real Electron `File` object end-to-end — Act 3
+> below is still the smoke pass that confirms it in practice.
 
 ## Setup — two instances on one Mac
 
@@ -100,7 +100,7 @@ Expect:
    window.bridgeTransport.onMessage((m) => console.log(m))
    window.bridgeTransport.send({ t: 'req', id: 999, cmd: 'getState', args: [] })
    ```
-   Expect a logged `{ t: 'res', id: 999, ok: true, result: { deviceKey: '<64-hex-char string>', groupStatus: 'none', ... } }` frame — a real key, not `undefined`/empty.
+   Expect a logged `{ t: 'res', id: 999, ok: true, value: { deviceKey: '<64-hex-char string>', groupStatus: 'none', ... } }` frame — a real key, not `undefined`/empty.
 
 Leave A running for Act 2.
 
@@ -326,10 +326,11 @@ rm -f ~/Library/LaunchAgents/com.pear-wallpaper.plist
 
 ## Known limits of this script
 
-- **Act 3/6's Send picker is expected broken** until the `Send.js`
-  `resolveFilePath`/`pear-electron` fix lands (see the note at the top) —
-  re-run this script's Acts 3, 4, and 6 after that fix wave, using the real
-  picker/drop instead of the console workaround.
+- **Act 3/6's Send picker fix (`webUtils.getPathForFile` via
+  `preload.js`) landed in the final-review fix wave but has not been
+  manually smoke-tested against a real Electron `File` object** — run
+  Acts 3, 4, and 6 with the real picker/drop (not the console workaround)
+  as that smoke pass.
 - **Act 11 (OTA)** exercises `pear-runtime-updater` end-to-end for the first
   time outside of source-reading (`progress.md`'s Task 6 entries); the
   deployment-folder layout (`/by-arch/<arch>/app/<name>`) has only been

@@ -159,10 +159,10 @@ OTA path as the least battle-tested part of this app (flagged further in
 ## Known limitations
 
 - `ui/components/Send.js`'s file-path resolution for the Send tab's
-  browse/drag-drop still falls back to a `pear-electron` dynamic import
-  that no longer resolves (that dependency was removed in the pivot) —
-  on Electron builds where `File#path` is undefined (Electron ≥32, which
-  this app pins to), both picking and dropping a file are degraded. Needs
-  `webUtils.getPathForFile` wired through `preload.js`/`main.js`. See
-  `docs/notes/qa-desktop.md`'s note at the top and the JOURNAL's pivot
-  entry.
+  browse/drag-drop now uses `webUtils.getPathForFile`, exposed to the
+  renderer as `window.pathForFile` by `preload.js` (final-review fix
+  wave; replaces the earlier `pear-electron` dynamic import, which never
+  resolved once that dependency was removed in the pivot). This has not
+  been smoke-tested against a real Electron `File` object end-to-end —
+  see `docs/notes/qa-desktop.md`'s Act 3 for the manual smoke pass this
+  still needs.

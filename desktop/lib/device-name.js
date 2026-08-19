@@ -6,7 +6,9 @@ function resolveDeviceName ({ storageDir, fs = require('fs'), hostname = () => o
   try {
     const existing = fs.readFileSync(file, 'utf8').trim()
     if (existing) return existing
-  } catch {}
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err
+  }
   const name = hostname()
   fs.mkdirSync(storageDir, { recursive: true })
   fs.writeFileSync(file, name)

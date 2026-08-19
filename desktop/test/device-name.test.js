@@ -16,3 +16,9 @@ test('returns the persisted value on later calls (ignores hostname)', async (t) 
   fs.writeFileSync(path.join(dir, 'device-name.txt'), 'Living-Room')
   t.is(resolveDeviceName({ storageDir: dir, fs, hostname: () => 'Mac-Studio' }), 'Living-Room')
 })
+
+test('falls back to hostname when file contains only whitespace', async (t) => {
+  const dir = await tmp(t)
+  fs.writeFileSync(path.join(dir, 'device-name.txt'), '   ')
+  t.is(resolveDeviceName({ storageDir: dir, fs, hostname: () => 'Fallback-Host' }), 'Fallback-Host')
+})

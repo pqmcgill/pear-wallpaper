@@ -11,12 +11,24 @@
     "make": "electron-forge make",
     "test": "brittle test/*.test.js"
   },
+  "imports": {
+    "fs": { "bare": "bare-fs", "default": "fs" },
+    "path": { "bare": "bare-path", "default": "path" },
+    "os": { "bare": "bare-os", "default": "os" },
+    "util": { "bare": "bare-utils", "default": "util" },
+    "child_process": { "bare": "./lib/compat/child_process.js", "default": "child_process" }
+  },
   "dependencies": {
     "pear-wallpaper-core": "file:../core",
     "pear-runtime": "^1.3.1",
     "preact": "^10.24.0",
     "htm": "^3.1.1",
-    "@paulmillr/qr": "^0.2.1"
+    "@paulmillr/qr": "^0.2.1",
+    "bare-fs": "^4.8.0",
+    "bare-path": "^3.1.1",
+    "bare-os": "^3.9.3",
+    "bare-utils": "^1.6.0",
+    "bare-subprocess": "^5.2.3"
   },
   "devDependencies": {
     "electron": "^33",

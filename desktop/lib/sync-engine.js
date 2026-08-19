@@ -3,6 +3,7 @@ const EventEmitter = require('events')
 function createSyncEngine ({ core, platform, intervalMs = 180000 }) {
   const ee = new EventEmitter()
   let timer = null
+  let wallpaperHandler = null
   let applying = false
   let queued = false
   const engine = {
@@ -13,20 +14,35 @@ function createSyncEngine ({ core, platform, intervalMs = 180000 }) {
       if (applying) { queued = true; return }
       applying = true
       try {
-        let item
-        while ((item = await core.pendingWallpaper())) {
+        while (true) {
+          let item
+          try {
+            item = await core.pendingWallpaper()
+          } catch (err) {
+            ee.emit('error', err) // surface via 'error', never throw out of applyPending
+            break
+          }
+          if (!item) break
           try {
             await platform.setWallpaper(item.filePath)
           } catch (err) {
             ee.emit('error', err) // leave unacked -> retried next trigger
             break
           }
-          await core.markApplied(item.id)
+          try {
+            await core.markApplied(item.id)
+          } catch (err) {
+            ee.emit('error', err) // ack failed -> may re-apply, but never throw
+            break
+          }
           ee.emit('applied', { id: item.id })
         }
       } finally {
         applying = false
-        if (queued) { queued = false; this.applyPending() }
+        if (queued) {
+          queued = false
+          this.applyPending().catch((err) => ee.emit('error', err))
+        }
       }
     },
     async syncNow () {
@@ -35,11 +51,16 @@ function createSyncEngine ({ core, platform, intervalMs = 180000 }) {
       await this.applyPending()
     },
     start () {
-      core.on('wallpaper', () => { engine.applyPending() })
-      timer = setInterval(() => { engine.syncNow() }, intervalMs)
+      wallpaperHandler = () => { engine.applyPending().catch((err) => ee.emit('error', err)) }
+      core.on('wallpaper', wallpaperHandler)
+      timer = setInterval(() => { engine.syncNow().catch((err) => ee.emit('error', err)) }, intervalMs)
       if (timer.unref) timer.unref()
     },
-    stop () { if (timer) clearInterval(timer); timer = null }
+    stop () {
+      if (timer) clearInterval(timer)
+      timer = null
+      if (wallpaperHandler) { core.removeListener('wallpaper', wallpaperHandler); wallpaperHandler = null }
+    }
   }
   return engine
 }

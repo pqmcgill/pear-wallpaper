@@ -50,6 +50,18 @@ test("start(): a 'wallpaper' event triggers applyPending (real-time path)", asyn
   eng.stop()
 })
 
+test("applyPending: a rejecting core call surfaces via 'error', not a throw", async (t) => {
+  const core = fakeCore([])
+  core.pendingWallpaper = async () => { throw new Error('pendingWallpaper boom') }
+  const platform = fakePlatform()
+  const eng = createSyncEngine({ core, platform })
+  const errors = []; eng.on('error', (e) => errors.push(e))
+  await t.execution(eng.applyPending())
+  t.is(platform.setCalls.length, 0, 'setter never reached')
+  t.is(errors.length, 1)
+  t.is(errors[0].message, 'pendingWallpaper boom')
+})
+
 test('syncNow(): calls core.sync then applyPending and updates lastSync', async (t) => {
   const core = fakeCore([{ id: 's4', filePath: '/r/s4.png' }]); const platform = fakePlatform()
   const eng = createSyncEngine({ core, platform })

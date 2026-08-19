@@ -1,7 +1,18 @@
 'use strict'
-const { app, BrowserWindow, ipcMain } = require('electron')
+const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage } = require('electron')
 const path = require('path')
 const PearRuntime = require('pear-runtime')
+
+// Single instance: a second launch should focus the existing window instead
+// of spawning a second worker/core alongside the first. Must be checked
+// before app.whenReady() does anything (worker launch, window creation) so a
+// losing second instance never gets that far.
+const gotTheLock = app.requestSingleInstanceLock()
+if (!gotTheLock) {
+  app.quit()
+  return
+}
+app.on('second-instance', () => { if (win) { win.show(); win.focus() } })
 
 let win = null
 function createWindow () {
@@ -16,6 +27,41 @@ function createWindow () {
     }
   })
   win.loadFile('ui/index.html')
+  // Close-to-tray: hitting the window's close button hides it instead of
+  // quitting (the worker/core keep running in the background, reachable via
+  // the tray). Only a real quit (tray "Quit" -> app.isQuitting = true, see
+  // createTray below) lets the window actually close.
+  win.on('close', (e) => {
+    if (!app.isQuitting) { e.preventDefault(); win.hide() }
+  })
+}
+
+// Tray: menu-bar presence for the app while it's resident in the background
+// (see close-to-tray above and app.dock.hide() below). "Sync now" talks
+// directly to the worker over the same newline-JSON framing the relay
+// below uses to speak bridge frames to/from the worker; -1 as the frame id
+// is fine here since nothing in main.js correlates replies to requests (it
+// only relays worker->renderer frames verbatim, see the workerPipe 'data'
+// handler).
+let tray = null
+function createTray () {
+  tray = new Tray(nativeImage.createFromPath(path.join(__dirname, 'ui', 'trayTemplate.png')))
+  const menu = Menu.buildFromTemplate([
+    { label: 'Open Pear Wallpaper', click: () => { if (win) { win.show(); win.focus() } else createWindow() } },
+    { label: 'Sync now', click: () => { if (workerPipe) workerPipe.write(Buffer.from(JSON.stringify({ t: 'req', id: -1, cmd: 'syncNow', args: [] }) + '\n')) } },
+    { type: 'separator' },
+    // Quit is handled entirely here: set the flag so close-to-tray/before-quit
+    // let it through, then app.quit() triggers the before-quit handler below
+    // (Task 3) which sends the worker a `{t:'shutdown'}` frame and waits for
+    // it to tear down core/engine before the app process actually exits.
+    // The renderer/tray must NOT call the bridge `quit` command — bridge-main's
+    // `quit` calls a nonexistent `Pear.exit(0)` in this topology (dead code
+    // left over from the pear-runtime UI process shape; not reachable from
+    // here and not fixed here, see task-3/task-4 notes).
+    { label: 'Quit', click: () => { app.isQuitting = true; app.quit() } }
+  ])
+  tray.setToolTip('Pear Wallpaper')
+  tray.setContextMenu(menu)
 }
 
 // Launch the Bare worker via pear-runtime@1.3.1. Electron's main process is
@@ -41,6 +87,10 @@ function createWindow () {
 let workerPipe = null
 
 app.whenReady().then(() => {
+  // Menu-bar app: no dock icon, tray is the only chrome while backgrounded.
+  if (app.dock) app.dock.hide()
+  createTray()
+
   const storageDir = app.getPath('userData')
   const exePath = app.getPath('exe')
 
@@ -65,7 +115,9 @@ app.whenReady().then(() => {
 })
 ipcMain.on('bridge:to-main', (_evt, msg) => { if (workerPipe) workerPipe.write(Buffer.from(JSON.stringify(msg) + '\n')) })
 
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
+// No window-all-closed→quit: this is a menu-bar-resident app (close-to-tray,
+// see createWindow's win.on('close', ...) above), so hiding the last window
+// must NOT quit it — only the tray's Quit item (or OS-level app.quit()) does.
 
 // Graceful shutdown: send a `{ t: 'shutdown' }` control frame so the worker
 // can run `engine.stop()`/`await core.close()` before it exits (see

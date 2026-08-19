@@ -1,6 +1,7 @@
 import { h, render } from 'preact'
 import htm from 'htm'
 import { createBridgeUi } from './bridge-ui.js'
+import { createElectronTransport } from '../lib/transport/electron-ipc.js'
 import { ErrorBanner } from './components/ErrorBanner.js'
 import { Onboarding } from './components/Onboarding.js'
 import { Waiting } from './components/Waiting.js'
@@ -10,10 +11,11 @@ const html = htm.bind(h)
 
 // Electron conversion (Task 1): the renderer transport is now
 // `window.bridgeTransport`, exposed by ../preload.js via contextBridge
-// over ipcRenderer. A proper renderer-side adapter (matching whatever
-// shape bridge-ui expects) lands in Task 4; for Task 1 this is used
-// directly so the app boots and the preload IPC channel can be proven.
-const bridge = createBridgeUi(window.bridgeTransport)
+// over ipcRenderer. Task 4 adds `createElectronTransport` as the
+// renderer-side adapter that bridge-ui consumes (a testable seam over the
+// raw preload API, imported here from the CJS module in lib/ via ESM
+// named-import interop — see lib/transport/electron-ipc.js).
+const bridge = createBridgeUi(createElectronTransport(window.bridgeTransport))
 let snapshot = { groupStatus: 'none', roster: [], sends: [], received: [] }
 
 function dismissError () { snapshot = { ...snapshot, lastError: null }; draw() }

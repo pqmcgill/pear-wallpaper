@@ -1,5 +1,5 @@
 'use strict'
-const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage } = require('electron')
+const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, powerMonitor } = require('electron')
 const path = require('path')
 const PearRuntime = require('pear-runtime')
 
@@ -112,6 +112,16 @@ app.whenReady().then(() => {
   })
 
   createWindow()
+
+  // Wake-from-sleep: the OS can leave the sync engine's own timers stale
+  // across a sleep/resume (schedules missed while suspended aren't replayed
+  // on their own), so force a sync as soon as the machine wakes. Uses the
+  // same newline-JSON framing as the tray's "Sync now" above; -2 as the
+  // frame id is fine for the same reason (nothing in main.js correlates
+  // replies to requests).
+  powerMonitor.on('resume', () => {
+    if (workerPipe) workerPipe.write(Buffer.from(JSON.stringify({ t: 'req', id: -2, cmd: 'syncNow', args: [] }) + '\n'))
+  })
 })
 ipcMain.on('bridge:to-main', (_evt, msg) => { if (workerPipe) workerPipe.write(Buffer.from(JSON.stringify(msg) + '\n')) })
 

@@ -1,9 +1,6 @@
 import { h, render } from 'preact'
 import htm from 'htm'
-import ui from 'pear-electron'
 import { createBridgeUi } from './bridge-ui.js'
-import { createPearTransportUi } from './pear-transport.js'
-import { createTray } from './tray.js'
 import { ErrorBanner } from './components/ErrorBanner.js'
 import { Onboarding } from './components/Onboarding.js'
 import { Waiting } from './components/Waiting.js'
@@ -11,13 +8,12 @@ import { Waiting } from './components/Waiting.js'
 import { MainView } from './components/MainView.js'
 const html = htm.bind(h)
 
-// Task 9: pear-electron has no preload step that hands the renderer a
-// `window.__pearTransport` global for app-level messages — see
-// ../lib/pear-transport.js for why, and ./pear-transport.js for the real
-// mechanism (the `pear-pipe` duplex shared with the Bare-hosted app
-// process). `window.__pearTransport` is kept as an override hook (e.g. for
-// tests that stub it) but production wiring builds its own.
-const bridge = createBridgeUi(window.__pearTransport || createPearTransportUi())
+// Electron conversion (Task 1): the renderer transport is now
+// `window.bridgeTransport`, exposed by ../preload.js via contextBridge
+// over ipcRenderer. A proper renderer-side adapter (matching whatever
+// shape bridge-ui expects) lands in Task 4; for Task 1 this is used
+// directly so the app boots and the preload IPC channel can be proven.
+const bridge = createBridgeUi(window.bridgeTransport)
 let snapshot = { groupStatus: 'none', roster: [], sends: [], received: [] }
 
 function dismissError () { snapshot = { ...snapshot, lastError: null }; draw() }
@@ -58,13 +54,4 @@ bridge.call('getState').then((s) => { snapshot = { ...snapshot, ...s }; draw() }
   .catch((err) => { snapshot = { ...snapshot, lastError: err.message }; draw() })
 draw()
 
-// Tray: must be created here, not in the Bare-main entrypoint — see
-// ./tray.js for why. `onOpen` stays local to this window; `onSyncNow`/
-// `onQuit` need core/engine, so they go back over the bridge.
-createTray({
-  ui,
-  iconPath: 'ui/trayTemplate.png',
-  onOpen: () => { ui.app.show(); ui.app.focus({ steal: true }) },
-  onSyncNow: () => bridge.call('syncNow'),
-  onQuit: () => bridge.call('quit')
-}).catch((err) => console.error('[pear-wallpaper] tray setup failed', err))
+// Tray moved to main.js (main-process concern under Electron) — Task 4.

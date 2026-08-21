@@ -42,7 +42,9 @@ renderer (Chromium, Preact + htm UI)
 The bridge (`lib/bridge-main.js` / `ui/bridge-ui.js`) is transport-agnostic
 (`{ send, onMessage }`), so neither it nor any UI component changed across
 the pivot — only thin adapters at each hop are new
-(`lib/transport/bare-ipc.js`, `lib/transport/electron-ipc.js`), plus
+(`lib/transport/bare-ipc.js`, `ui/electron-ipc.js` — the latter lives in
+`ui/` as browser ESM because the file:// renderer has no bundler and cannot
+import CJS from `lib/`), plus
 `main.js`'s relay, which just forwards frames both directions without
 parsing them.
 
@@ -62,11 +64,15 @@ parsing them.
   `platform/` (`darwin.js`'s `osascript` wallpaper setter, selected via
   `platform/index.js`), plus `compat/` (Bare shims for `process` and
   `child_process`, needed because Bare has no Node builtins) and
-  `transport/` (the two new adapters above). `single-instance.js` is kept
+  `transport/` (the worker-side `bare-ipc.js` adapter; the renderer-side
+  adapter is `ui/electron-ipc.js`, see above). `single-instance.js` is kept
   in-tree but retired from the boot path (Electron's own lock replaces it).
 - `ui/` — the Preact renderer (Onboarding/Waiting/MainView with
   Devices/Send/Received/Settings tabs), reused unchanged. `ui/index.html`
-  loads `ui/app.js`.
+  loads `ui/app.js`, and carries an inline import map (CSP-hashed — see the
+  comment in the file and `test/renderer-modules.test.js`) that resolves the
+  renderer's bare specifiers, since the page is plain file:// with no
+  bundler.
 - `forge.config.js` — electron-forge packaging config (macOS `.app` via
   `@electron-forge/maker-zip`, `productName: 'Pear Wallpaper'`).
 
@@ -142,10 +148,11 @@ OTA path as the least battle-tested part of this app (flagged further in
   locking, the wallpaper setter's argv-safety, the LaunchAgent plist
   writer, the device-name resolver, the sync engine's apply/coalesce/
   error-surfacing logic, both new transport adapters
-  (`bare-ipc.js`/`electron-ipc.js`), the bridge's command/event wire
-  protocol on both ends, and every Preact component's rendering + bridge-
-  call wiring. Current: **48/48 tests, 87/87 asserts, pristine** — no
-  stray warnings, no skips.
+  (`lib/transport/bare-ipc.js`/`ui/electron-ipc.js`), the bridge's
+  command/event wire protocol on both ends, the renderer module graph's
+  import-map/CSP-hash/ESM invariants (`test/renderer-modules.test.js`), and
+  every Preact component's rendering + bridge-call wiring. Current:
+  **53/53 tests, 120/120 asserts, pristine** — no stray warnings, no skips.
 - **Manual (GUI/OS effects `npm test` cannot reach)** — real window
   rendering, the renderer↔main↔worker IPC round-trip actually crossing
   process boundaries, macOS's one-time Automation permission prompt for

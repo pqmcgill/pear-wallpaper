@@ -210,3 +210,23 @@
   single-instance, launch-at-login against a built `.app`, OTA must-smoke,
   revoke, offline re-apply); `desktop/README.md` rewritten for Electron
   dev/package/make and the new testing split.
+- 2026-08-21 Blank-white-window fix: root cause was the Pear→Electron
+  conversion leaving the renderer's module graph unresolvable — main.js
+  `loadFile`s ui/index.html as plain file:// with no bundler, so the bare
+  specifiers (`preact`, `preact/hooks`, `htm`, `@paulmillr/qr`) threw
+  "Failed to resolve module specifier" (Pear's bundler used to resolve
+  them), and app.js's one surviving CJS import
+  (`lib/transport/electron-ipc.js`) would have thrown "module is not
+  defined" right after. Fix: inline `<script type="importmap">` in
+  ui/index.html mapping the four bare specifiers to their browser-ESM files
+  in node_modules (covers preact/hooks' internal `import "preact"` too),
+  plus an explicit CSP `script-src 'self' 'sha256-…'` allowlisting the
+  map's exact text (external import maps aren't supported in Electron 33's
+  Chromium; inline scripts need the hash); transport adapter moved to
+  `ui/electron-ipc.js` as ESM (ui/ is the `"type": "module"` scope) and the
+  lib/ CJS copy deleted. New guard `test/renderer-modules.test.js` (TDD:
+  written first, failed 4/5 against the old tree) asserts import-map
+  coverage of every bare specifier, that map targets and relative imports
+  resolve on disk, that the CSP hash tracks the current map text, and that
+  the transport module stays ESM. Suite: 53/53 tests, 120/120 asserts
+  (was 48/87).

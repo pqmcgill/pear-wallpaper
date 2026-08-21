@@ -2,8 +2,29 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' file: data:; style-src 'self' 'unsafe-inline'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-GFfZbqDKJ95ecm5NBFWs8bTUoXW3ajZoOFNd5iWVVbQ='; img-src 'self' file: data:; style-src 'self' 'unsafe-inline'" />
     <title>Pear Wallpaper</title>
   </head>
-  <body><div id="app"></div><script type="module" src="./app.js"></script></body>
+  <body><div id="app"></div>
+    <!-- This page is loaded via win.loadFile() (plain file://, no bundler),
+         so bare specifiers like "preact" only resolve through this import
+         map — including preact/hooks' own internal `import "preact"`.
+         Electron 33's Chromium does not support external import maps
+         (src=...), so it must be inline; and an inline script is subject to
+         the CSP's script-src, so the sha256 hash up in the CSP meta tag must
+         match this script's EXACT text. If you edit anything between the
+         import-map script tags below, regenerate the hash:
+           node -e "const s=require('fs').readFileSync('ui/index.html','utf8').match(/<script type=\"importmap\">([\s\S]*?)<\/script>/)[1];console.log(require('crypto').createHash('sha256').update(s,'utf8').digest('base64'))"
+         test/renderer-modules.test.js enforces that the hash tracks the map. -->
+    <script type="importmap">
+    {
+      "imports": {
+        "preact": "../node_modules/preact/dist/preact.module.js",
+        "preact/hooks": "../node_modules/preact/hooks/dist/hooks.module.js",
+        "htm": "../node_modules/htm/dist/htm.module.js",
+        "@paulmillr/qr": "../node_modules/@paulmillr/qr/index.js"
+      }
+    }
+    </script>
+    <script type="module" src="./app.js"></script></body>
 </html>

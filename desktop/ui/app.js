@@ -1,7 +1,7 @@
 import { h, render } from 'preact'
 import htm from 'htm'
 import { createBridgeUi } from './bridge-ui.js'
-import { createElectronTransport } from '../lib/transport/electron-ipc.js'
+import { createElectronTransport } from './electron-ipc.js'
 import { ErrorBanner } from './components/ErrorBanner.js'
 import { Onboarding } from './components/Onboarding.js'
 import { Waiting } from './components/Waiting.js'
@@ -13,8 +13,9 @@ const html = htm.bind(h)
 // `window.bridgeTransport`, exposed by ../preload.js via contextBridge
 // over ipcRenderer. Task 4 adds `createElectronTransport` as the
 // renderer-side adapter that bridge-ui consumes (a testable seam over the
-// raw preload API, imported here from the CJS module in lib/ via ESM
-// named-import interop — see lib/transport/electron-ipc.js).
+// raw preload API). It lives in ui/ as ESM — this file:// page has no
+// bundler, so browser ESM cannot import a CJS module from lib/ (there is
+// no named-import interop without a bundler) — see ./electron-ipc.js.
 const bridge = createBridgeUi(createElectronTransport(window.bridgeTransport))
 let snapshot = { groupStatus: 'none', roster: [], sends: [], received: [] }
 

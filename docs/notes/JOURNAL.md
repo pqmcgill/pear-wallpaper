@@ -589,3 +589,10 @@
   `cd android && npm run test:worklet`: 2/2 (8/8 asserts). `npm run
   test:ui`: 59/59. All four suites pristine, no code changes this task
   (QA + docs only).
+- 2026-08-23 Plan 3 final review (whole-branch, post-Task-10): Ready to
+  merge. Fix wave: guarded share-staging failure into the error banner
+  (android crash-path) and ported the prefix-match join-error fix to
+  desktop Onboarding/Waiting (bug discovered in Task 5, desktop had it
+  too). Final suites: bridge 20/47, desktop 39/97, android ui 61 (14
+  suites), worklet 2/8 — all green. Physical-device checklist pending
+  (qa-android.md).

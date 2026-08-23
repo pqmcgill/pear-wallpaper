@@ -277,3 +277,31 @@
   awaits it); `test/smoke.test.js` mocks `react-native-bare-kit` and
   renders the echo screen without the native module. `npm run test:ui`:
   1/1 tests, pristine.
+- 2026-08-23 Android-shell Task 3: `android/worklet/host.js` factors the
+  runtime-agnostic worklet host out of the 6-line BareKit entry
+  (`android/worklet/core-host.js`) so brittle can drive it in Node against
+  the REAL `pear-wallpaper-core` stack with an in-memory duplex standing
+  in for `BareKit.IPC`. Protocol: first inbound frame must be
+  `{ t: 'init', storageDir, deviceName, intervalMs? }` (config crosses the
+  IPC as a message, not argv — there's no sidecar spawn on Android, RN
+  owns storageDir/deviceName); host replies `{ t: 'evt', event: 'ready' }`
+  (or `'error'` with `{ message }`) before speaking any bridge frames;
+  `{ t: 'shutdown' }` stops the engine, closes the core, and calls
+  `exit()`. `platform: null` into `createSyncEngine` is how the
+  apply-inversion reaches the engine — Android applies wallpapers RN-side,
+  not from a shell-owned platform module. `npm run test:worklet`
+  (`brittle test-worklet/*.test.js`): 1/1 tests, 4/4 asserts, pristine.
+  Two unbudgeted findings (both in `docs/notes/api-divergences.md`): jest
+  was also matching `test-worklet/*.test.js` via its default `testMatch`
+  and failing on it (fixed with `testPathIgnorePatterns` in
+  `jest.config.js` — `npm run test:ui` stayed green, 1/1); `bare-pack` had
+  no established pin anywhere in the repo, so pinned to `2.2.1` (current
+  npm latest). `npm run bundle:worklet` (`bare-pack --linked --host
+  android-arm64 --host android-x64 --out app/gen/worklet.bundle.mjs
+  worklet/core-host.js`) resolved `pear-wallpaper-core`/`-bridge` straight
+  through their `file:../core`/`file:../bridge` symlinks with no extra
+  flags needed, and rewrote both `sodium-native` and `udx-native` (plus 9
+  more transitive native addons) to `linked:lib<name>.<version>.so`
+  specifiers in the bundle's JSON header — confirmed by grep, not embedded
+  binaries. `android/app/gen/` stayed gitignored (`git status` shows no
+  bundle).

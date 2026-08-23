@@ -493,3 +493,58 @@ already resolved in `package-lock.json`, then regenerating the lockfile
 (`npm install`) and confirming `npm ci` installs cleanly from it — see
 the fix report appended to `task-2-report.md` for the exact versions and
 verification output.
+
+## Task 3: jest picks up brittle's test-worklet/*.test.js too
+
+Not named in the brief. `android/test-worklet/host.test.js` uses
+`require('brittle')`/`test(name, fn)`, run via the new `test:worklet`
+script (`brittle test-worklet/*.test.js`). But jest's default
+`testMatch` (`**/?(*.)+(spec|test).[tj]s?(x)`) also matches that same
+file path, and `npm run test:ui` (`jest`) picked it up and tried to run
+it as a jest suite — it failed immediately with `Cannot find module
+'@babel/runtime/helpers/interopRequireDefault' from '../core/index.js'`
+(jest-expo's babel-jest transform pipeline doesn't apply cleanly to
+`pear-wallpaper-core`'s plain CJS, which is meant to run under Node/Bare
+directly, not through Metro/Babel). Fixed by adding
+`testPathIgnorePatterns: ['/node_modules/', '<rootDir>/test-worklet/']`
+to `android/jest.config.js` (the explicit `/node_modules/` entry is
+jest's own default, restated because setting the option at all replaces
+it rather than appending). Verified both `npm run test:worklet` (1/1,
+4/4 asserts) and `npm run test:ui` (1/1) green in the same tree
+afterward.
+
+## Task 3: bare-pack version — no established pin to match
+
+Unlike `brittle`/`test-tmp` (matched desktop's `3.19.1`/`1.4.0` via
+`npm ls`), `bare-pack` isn't a dependency anywhere else in this repo
+(desktop bundles nothing — it runs its Bare worker straight off disk via
+pear-runtime's sidecar) and `react-native-bare-kit@0.15.0` itself depends
+on `bare-link`, not `bare-pack`, for its own native-module linking, so
+there was no precedent version to copy. Pinned to `bare-pack@2.2.1`, the
+current npm `latest` at the time of this task (`npm view bare-pack
+version`).
+
+## Task 3: `--linked` bundling worked with no extra flags for the `file:` symlinked deps
+
+The brief flagged this as a thing to watch for ("record divergences if
+bare-pack needs flags for symlinked deps"). It didn't: `bare-pack
+--linked --host android-arm64 --host android-x64 --out
+app/gen/worklet.bundle.mjs worklet/core-host.js` resolved
+`pear-wallpaper-core`/`pear-wallpaper-bridge` straight through their
+`file:../core` / `file:../bridge` npm symlinks with no special flag —
+the bundle's JSON header's `resolutions` map is full of
+`/node_modules/pear-wallpaper-core/...` and
+`/node_modules/pear-wallpaper-bridge/...` paths, `bare-module-traverse`
+evidently follows symlinks transparently. `--linked` rewrote every
+native addon's self-`require` (the `.` resolution on each addon's
+`binding.js`) from a bundled binary to a `linked:lib<name>.<version>.so`
+specifier — confirmed for both native modules the brief calls out
+(`"linked:libsodium-native.5.1.0.so"`, `"linked:libudx-native.1.21.0.so"`)
+and, incidentally, 9 more native deps pulled in transitively
+(`bare-fs`, `bare-inspect`, `bare-path`, `bare-type`, `bare-url`,
+`fs-native-extensions`, `quickbit-native`, `rocksdb-native`,
+`simdle-native`) — 11 `linked:` specifiers / 32 occurrences total in the
+2.2MB output. These `.so`s are supplied at runtime by BareKit's own
+linked-modules mechanism per the `--host` targets given
+(`android-arm64`, `android-x64`), not embedded in the bundle — that's
+the point of `--linked` for a mobile target.

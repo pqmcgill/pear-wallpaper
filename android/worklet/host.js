@@ -30,14 +30,29 @@ function createCoreHost ({ transport, exit = () => {} }) {
         engine.start()
         transport.send({ t: 'evt', event: 'ready', payload: {} })
       } catch (err) {
+        // Init failure is TERMINAL, mirroring desktop/worker/core-host.js's
+        // Bare.exit(1) — `started` is never reset, so a second init frame
+        // would otherwise be silently ignored forever (any caller awaiting
+        // 'ready' would hang). Recovery is relaunching the worklet, never
+        // re-sending init on the same instance (Task 4's worklet-client.js
+        // relies on this: on 'error' it treats the worklet as dead).
+        console.error('[worklet] init failed', err)
         transport.send({ t: 'evt', event: 'error', payload: { message: err.message } })
+        exit(1)
       }
       return
     }
     // Message-level shutdown, mirroring desktop: used by Task 9's bounded
     // background rounds so corestore closes cleanly before terminate().
     if (msg.t === 'shutdown') {
-      try { if (engine) engine.stop(); if (core) await core.close() } catch {} finally { exit() }
+      try {
+        if (engine) engine.stop()
+        if (core) await core.close()
+      } catch (err) {
+        console.error('[worklet] error during shutdown', err)
+      } finally {
+        exit(0)
+      }
     }
   })
 }

@@ -594,19 +594,31 @@ rather than pulling in a URL polyfill for this one substitution.
 Old-style `expo-file-system` legacy functions (`getInfoAsync`, etc.) are
 still exported from the package root but throw at runtime per their own
 `@deprecated ... This method will throw in runtime` JSDoc — only the new
-`File`/`Directory`/`Paths` API is usable at all under SDK 55's installed
-`expo-file-system@55.0.19`.
+`File`/`Directory`/`Paths` API is usable at all under this SDK.
 
-`expo-file-system` itself was not added to `android/package.json` (only
-`expo-device` was, per the brief) — it's already resolvable because
-`expo@55.0.23` itself depends on `expo-file-system@~55.0.19` internally
-(confirmed in `package-lock.json`), so npm hoists it into
-`node_modules/expo-file-system` even though it's not a direct dependency
-of this app. `lib/worklet-client.js` imports it directly (`import {
-Paths } from 'expo-file-system'`), which works today but is relying on
-another package's transitive dependency rather than a declared one —
-flagging this now since a later task (`docs/superpowers/plans/...` Task
-using "the same expo-file-system API family as Task 4") will import it
-again; if `expo` ever stops depending on it directly, both imports break
-silently until someone runs `npx expo install expo-file-system` and adds
-it for real.
+**Update (Task 4 review fix, same day):** `expo-file-system` was
+originally left undeclared in `android/package.json` — only `expo-device`
+was added, per the brief's literal file list — relying on `expo@55.0.23`'s
+own internal `expo-file-system@~55.0.19` dependency to hoist it into
+`node_modules/expo-file-system`. Review correctly flagged this as fragile
+(`lib/worklet-client.js` imports it directly; if `expo` ever stopped
+depending on it, or a hoisting quirk put a second copy elsewhere, the
+import breaks with no `package.json` signal explaining why). Fixed by
+`npx expo install expo-file-system` (SDK-compatible resolution picked
+`55.0.25`, newer than the `55.0.19` that had been transitively hoisted —
+`npm ls expo-file-system` confirms a single deduped copy shared by both
+`expo` and this app's own direct dependency, so there's exactly one
+`expo-file-system` in the tree, not two diverging ones), then pinned exact
+(`"expo-file-system": "55.0.25"`, no `~`) same as every other
+Expo-managed package in this file. `npm ci` installs cleanly from the
+regenerated lockfile; `npm run test:ui` stayed green (11/11) — the
+`55.0.19` → `55.0.25` bump is a patch-level release within the same
+Expo SDK compatibility window, and the only surface this code touches
+(`Paths.document.uri`, a getter on the stable `Directory` class) is
+unchanged. No emulator rebuild was done for this fix: the installed
+`expo-file-system` code was already present and being exercised via the
+transitive path during the original on-device verification (Act 1 in
+`docs/notes/qa-android.md`) — this change only adds the missing
+`package.json`/lockfile declaration and bumps the resolved patch version,
+it does not change which code runs differently than what was already
+verified in a way relevant to this integration point.

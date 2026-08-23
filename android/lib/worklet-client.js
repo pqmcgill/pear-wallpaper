@@ -32,6 +32,14 @@ export function getBridge () {
   // clear it for an error that arrives before 'ready' ever did.
   let ready = false
   bridge.on('ready', () => { ready = true })
+  // No in-app retry is wired to this — deliberately. storageDir/deviceName
+  // are static for the process lifetime, so a fresh Worklet started with
+  // the same inputs would fail identically; the only real recovery is
+  // fixing whatever made storage unwritable (or restarting the app) after
+  // the terminal error surfaces via lastError. Clearing the singleton here
+  // just means the NEXT cold getBridge() call — a later screen mounting,
+  // Task 9's background path, or a restarted app — starts clean instead of
+  // handing back a bridge wired to a dead Worklet.
   bridge.on('error', () => { if (!ready) instance = null })
 
   // init MUST precede any bridge.call (host ignores bridge frames pre-init)

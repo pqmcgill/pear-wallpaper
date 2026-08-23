@@ -54,6 +54,11 @@ each section.
   story needs a rethink (e.g. save to Photos + shortcut/manual step),
   plus background execution is stricter than Android's.
 
+- **Copy-to-clipboard for invite codes.** One-tap/one-click copy of
+  the invite string wherever it's displayed (Android DeviceList +
+  Onboarding create flow, desktop DeviceList). Today it's
+  select-and-copy by hand — fiddly on Android especially.
+
 ## UX polish
 
 - **Make the app beautiful on all screen sizes.** Both shells are

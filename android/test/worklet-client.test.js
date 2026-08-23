@@ -151,14 +151,18 @@ test('calls made after ready pass through immediately, with no queueing', async 
 // consults before deciding whether to nudge the resident worklet instead
 // of opening a second one. -------------------------------------------
 
-test('isActive() is false before any getBridge() call and false while a worklet is still initializing', () => {
-  const { getBridge, isActive } = load()
+test('isActive() is false before any getBridge() call', () => {
+  const { isActive } = load()
   expect(isActive()).toBe(false)
-  getBridge()
-  expect(isActive()).toBe(false) // not ready yet — no 'ready' evt sent
 })
 
-test('isActive() is true once the resident worklet has reached ready', () => {
+test('isActive() is true as soon as getBridge() constructs the resident worklet — existence, not readiness, is the guard (a not-yet-ready worklet is still safely nudgeable via the queue-until-ready bridge)', () => {
+  const { getBridge, isActive } = load()
+  getBridge()
+  expect(isActive()).toBe(true) // true even before any 'ready' evt arrives
+})
+
+test('isActive() stays true once the resident worklet has reached ready', () => {
   const { getBridge, isActive, __instances } = load()
   getBridge()
   const w = __instances[0]

@@ -517,24 +517,43 @@
   `lib/worklet-identity.js` (`getStorageDir`/`getDeviceName`) so
   `worklet-client.js` and `background-sync.js` construct the corestore
   path identically — divergent values would silently fork one phone into
-  two device identities. Added `worklet-client.js`'s `isActive()` (true
-  only once the resident worklet reaches `'ready'`) — the single-writer
-  guard's enforcement point 2. TDD'd against a mocked
+  two device identities. Added `worklet-client.js`'s `isActive()` — the
+  single-writer guard's enforcement point 2. TDD'd against a mocked
   `react-native-bare-kit`/`worklet-client` (`test/background-sync.test.js`):
   full round trip (init→ready→syncNow→drain→shutdown→terminate) and the
   guard (`isActive()` true ⇒ nudge the resident bridge, zero `Worklet`
-  instances constructed). `npm run test:ui`: 57/57 (54 carried + 3 new).
-  `npm run test:worklet`: unchanged, 2/2 tests, 8/8 asserts. On-device QA
-  (scripted desktop peer, three distinct test images): backgrounded +
-  forced job → `'nudged-resident'`, wallpaper changed, byte-exact,
-  reproduced twice; killed via `am kill` (not force-stop) → process
-  respawned but froze before RN JS finished booting, task never ran (spec-
-  accepted opportunism) — the pending wallpaper still applied correctly
-  once the app was reopened, via the guaranteed sync-on-open path;
-  force-stop → job scheduler drops the job immediately, confirmed rather
-  than assumed. Foregrounded guard check surfaced a divergence from the
-  brief's literal expectation: no `background-sync` log appears at all
-  while foregrounded (platform-level no-op, not our guard) — the
-  no-second-worklet guarantee is instead proven by the backgrounded case
-  and the unit test. Full narrative, logcat excerpts, dumpsys wallpaper
-  before/after, and md5 evidence in `docs/notes/qa-android.md` Act 6.
+  instances constructed). On-device QA (scripted desktop peer, three
+  distinct test images): backgrounded + forced job → `'nudged-resident'`,
+  wallpaper changed, byte-exact, reproduced twice; killed via `am kill`
+  (not force-stop) → process respawned but froze before RN JS finished
+  booting, task never ran (spec-accepted opportunism) — the pending
+  wallpaper still applied correctly once the app was reopened, via the
+  guaranteed sync-on-open path; force-stop → job scheduler drops the job
+  immediately, confirmed rather than assumed. Foregrounded guard check
+  surfaced a divergence from the brief's literal expectation: no
+  `background-sync` log appears at all while foregrounded (platform-level
+  no-op, not our guard). Full narrative, logcat excerpts, dumpsys
+  wallpaper before/after, and md5 evidence in `docs/notes/qa-android.md`
+  Act 6.
+  **Review fix round** (3 Important findings, all fixed): (1) `isActive()`
+  was gated on `'ready'`, not existence — a real single-writer race during
+  a resident worklet's own bootstrap window would have constructed a
+  second `Worklet` on the same `storageDir`; changed to `instance !==
+  null` (existence is the correct guard — the wrapped bridge already
+  queues calls until ready, so nudging a not-yet-ready resident is safe).
+  (2) the fresh-Worklet branch was unbounded on failure: no timeout on
+  `await ready` (a hung worklet never terminated) and a pre-ready error
+  rejected before the `try/finally` (skipped shutdown/terminate entirely);
+  fixed with a 30s ready-timeout raced via `Promise.race` and a
+  restructure guaranteeing `terminate()` on every exit path — extended
+  `test/background-sync.test.js` with a terminate-assertion on the
+  pre-ready-error path and a new ready-timeout test. (3) **honesty
+  correction**: every on-device QA scenario that actually completed a
+  round took the `nudged-resident` branch — the fresh-Worklet (`'synced'`)
+  branch, the actual new production machinery this task adds, has **zero
+  on-device evidence** (the one scenario built to exercise it, the killed-
+  app case, froze before `runBoundedSyncRound()` was ever invoked); it
+  remains unit-tested and spike-adjacent only. Amended into the report's
+  Concerns, `qa-android.md` Act 6, and this line — not overstated as
+  device-proven. `npm run test:ui`: 59/59 pristine. `npm run test:worklet`:
+  unchanged, 2/2 tests, 8/8 asserts. JS-only fix, no rebuild.

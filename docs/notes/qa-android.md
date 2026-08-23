@@ -857,12 +857,20 @@ ReactNativeJS: '[background-sync]', 'nudged-resident'
 `SET_STATIC` record). `adb exec-out screencap -p` after `KEYCODE_HOME`
 (`t9-5-backgrounded-red.png`): the entire home screen is solid red.
 **This is the single-writer guard's real proof**: `isActive()` saw the
-resident worklet (started at app mount, already past `'ready'`) and
+resident worklet EXIST (it was long past `'ready'` by this point, but
+existence — not readiness — is what `isActive()` actually checks, a
+correction made in review: gating on readiness would leave a window
+during a resident worklet's own bootstrap where a background round could
+construct a second `Worklet` on the same `storageDir`) and
 `runBoundedSyncRound()` took the nudge branch — `bridge.call('syncNow')`
 + `applyPending()` on the *existing* bridge, never `new Worklet()`.
 Repeated later with wallpaper C (blue) for a second data point: same
 `'nudged-resident'` log, `id=6` → `id=7`, screenshot
-`t9-8-blue-guard-confirm.png` solid blue — reproducible.
+`t9-8-blue-guard-confirm.png` solid blue — reproducible. **Both real-device
+data points exercised the resident worklet already fully ready**, not the
+mid-bootstrap race the review fix specifically targets — that narrower
+case is covered only by `worklet-client.test.js`'s existence-based unit
+tests, not by this Act.
 
 ### (b) Killed via `am kill` (background kill, not force-stop)
 
@@ -912,6 +920,30 @@ design, not by our guard. The guard our code owns (`isActive()`) is
 instead proven by (a) above (real device, `nudged-resident`, zero new
 `Worklet` instances) and by `background-sync.test.js`'s guard test
 (`__instances` stays empty).
+
+### What this Act did NOT prove
+
+Stated plainly rather than buried: **every scenario in this Act that
+actually completed a background round took the `nudged-resident` branch**
+— the resident worklet was always present in-process. The one scenario
+built to exercise the *other* branch — `runBoundedSyncRound()` spinning up
+a fresh `Worklet` (the `'synced'` return value, the actual new production
+machinery Task 9 adds) — is (b) above, and it froze before RN JS finished
+booting, so `runBoundedSyncRound()` was never even invoked there. **The
+fresh-Worklet branch has zero on-device evidence from this Act.** What
+backs it instead: the Step 1 spike (a headless task body starting a
+Worklet with a trivial inline echo, not the real bundle/init/syncNow/
+applyPending/shutdown sequence) and `background-sync.test.js`'s unit
+tests (the full real sequence, but against a mocked IPC, not a real
+corestore or real Android process). Both are real signals, but neither is
+"the fresh round completed for real on a killed-and-respawned device,"
+which this Act could not establish on this emulator/debug-build
+combination.
+
+**Physical-device follow-up needed**: re-run scenario (b) on a physical
+device (or a release build, which skips the Metro-fetch cold-boot path)
+to see whether the process can get past the freeze in time to actually
+run `runBoundedSyncRound()`'s fresh-Worklet branch end to end.
 
 ### Byte-exact verification
 

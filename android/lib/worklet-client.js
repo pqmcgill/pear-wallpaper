@@ -50,7 +50,6 @@ export function getBridge () {
 
   realBridge.on('ready', () => {
     ready = true
-    instance.ready = true
     // Replay in arrival order; each call's own request/response id
     // round-trip through the real bridge from here, same as any call made
     // after ready.
@@ -101,12 +100,18 @@ export function getWorklet () {
   return instance ? instance.worklet : null
 }
 
-// Single-writer guard, consumed by Task 9's background-sync.js: true once
-// this resident worklet has actually reached 'ready' (not merely
-// constructed — a still-initializing worklet isn't safely nudgeable yet,
-// and if init fails the singleton is cleared before this could ever read
-// stale-true). The bounded background round uses this to decide whether to
-// nudge the resident worklet's bridge instead of opening a second one.
+// Single-writer guard, consumed by Task 9's background-sync.js: true as
+// soon as a resident worklet EXISTS, not only once it has reached 'ready'.
+// This is deliberate, not an oversight: getBridge()'s wrapped `bridge`
+// (above) already queues bridge.call()s until 'ready' fires, so nudging a
+// not-yet-ready resident is safe — the call just waits in that queue like
+// any other caller's would. Gating this on readiness instead would open a
+// window, during a resident worklet's bootstrap (e.g. a slow swarm
+// resume), where isActive() reads false and the background round
+// constructs a SECOND Worklet on the same storageDir — exactly the
+// single-writer violation this task exists to prevent. A terminal
+// pre-ready error still clears `instance` (below), so isActive() correctly
+// goes back to false the moment the resident worklet is actually gone.
 export function isActive () {
-  return instance !== null && instance.ready === true
+  return instance !== null
 }

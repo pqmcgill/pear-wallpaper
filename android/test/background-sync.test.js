@@ -106,15 +106,50 @@ test('a fresh round: init, ready, syncNow, drains pending via setter+markApplied
   jest.useRealTimers()
 })
 
-test('init failure (terminal error before ready) rejects the round without hanging', async () => {
+test('init failure (terminal error before ready) rejects the round AND still terminates the worklet (bounded shutdown runs on every exit path)', async () => {
+  jest.useFakeTimers({ doNotFake: ['nextTick'] })
   const { runBoundedSyncRound } = require('../lib/background-sync')
   const { __instances } = require('react-native-bare-kit')
 
   const roundPromise = runBoundedSyncRound()
+  // Attach the rejection assertion immediately (before driving fake
+  // timers below) so the promise is never observably unhandled between
+  // ticks — otherwise Node's unhandled-rejection tracking flags this test
+  // as failed even though the rejection is deliberate and gets caught.
+  const assertion = expect(roundPromise).rejects.toThrow('init failed: boom')
   const w = __instances[0]
   sendFrame(w.IPC, { t: 'evt', event: 'error', payload: { message: 'init failed: boom' } })
 
-  await expect(roundPromise).rejects.toThrow('init failed: boom')
+  // The outer try/finally's bounded shutdown-linger timer still has to
+  // elapse before terminate() fires, even on this failure path.
+  await jest.advanceTimersByTimeAsync(2000)
+
+  await assertion
+  expect(w.terminated).toBe(true)
+
+  jest.useRealTimers()
+})
+
+test('a worklet that never emits ready or error times out (bounded, does not hang forever) and still terminates', async () => {
+  jest.useFakeTimers({ doNotFake: ['nextTick'] })
+  const { runBoundedSyncRound } = require('../lib/background-sync')
+  const { __instances } = require('react-native-bare-kit')
+
+  const roundPromise = runBoundedSyncRound()
+  const assertion = expect(roundPromise).rejects.toThrow('worklet ready timed out')
+  const w = __instances[0]
+  // Deliberately never send 'ready' or 'error' on w.IPC.
+
+  await jest.advanceTimersByTimeAsync(30000) // READY_TIMEOUT_MS
+  await jest.advanceTimersByTimeAsync(2000) // shutdown linger
+
+  await assertion
+  expect(w.terminated).toBe(true)
+
+  const frames = w.IPC.written.map((s) => JSON.parse(s))
+  expect(frames.find((m) => m.t === 'shutdown')).toBeTruthy()
+
+  jest.useRealTimers()
 })
 
 test('guard: when the resident worklet isActive(), the round nudges it instead of constructing a Worklet', async () => {

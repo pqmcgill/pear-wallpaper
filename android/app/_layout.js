@@ -5,6 +5,7 @@ import { reduce, initialSnapshot } from '../lib/store'
 import { getBridge, getWorklet } from '../lib/worklet-client'
 import { createApplyController } from '../lib/apply-controller'
 import { setWallpaper } from '../modules/wallpaper-setter'
+import { getTarget } from '../lib/settings'
 
 // Default value covers the case where a screen is rendered outside this
 // provider (e.g. a unit test that mounts app/index.js directly): bridge is
@@ -23,9 +24,11 @@ export default function Layout () {
     const bridge = getBridge()
     setBridge(bridge)
 
-    // getTarget hardcoded to 'home' until Task 7 wires a settings module for
-    // the lock-screen toggle.
-    const controller = createApplyController({ bridge, setter: setWallpaper, getTarget: () => 'home' })
+    // getTarget (lib/settings.js, Task 7) reads the lock-screen toggle's
+    // persisted preference fresh on every apply pass — 'both' when the
+    // Settings tab's toggle is on, 'home' otherwise. Was hardcoded to
+    // `() => 'home'` before Task 7's settings module existed.
+    const controller = createApplyController({ bridge, setter: setWallpaper, getTarget })
 
     bridge.on('state', (payload) => {
       dispatch({ type: 'state', payload })

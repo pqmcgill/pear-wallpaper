@@ -421,3 +421,47 @@
   tests, 8/8 asserts. Full narrative, bug writeups, and before/after
   screenshots in `docs/notes/qa-android.md` Act 3 and
   `docs/notes/api-divergences.md`.
+- 2026-08-23 Android-shell Task 7: main UI — device list, invites, received
+  history, settings. `MainView.js` grows real Devices/Received/Settings tabs
+  (Send tab omitted — YAGNI, no local-file-picker flow on this milestone),
+  each component's logic ported verbatim from its desktop counterpart with
+  RN primitives swapped in for preact/htm. `lib/qr.js` calls the same
+  `@paulmillr/qr` `encodeQR(text, 'svg')` as desktop, then merges every
+  per-module `<rect>` into a single `<path>` — an Android-only fix for a
+  real on-device perf bug (react-native-svg's `SvgXml` makes one native
+  view per SVG element; a real invite QR's 1052 `<rect>`s became 1052
+  native `RectView`s, pegging the UI thread for up to ~24s per frame,
+  confirmed via `adb logcat`'s `EGL_emulation` stats and a `uiautomator
+  dump` view-count). `lib/settings.js` persists `{ lockScreen }` to
+  `settings.json` under the documents dir (same `expo-file-system` family
+  as Task 4) and exports `getTarget()` (`lockScreen ? 'both' : 'home'`),
+  wired into Task 6's `createApplyController` in `_layout.js` — replacing
+  the `() => 'home'` placeholder — and consumed directly by `Received`'s
+  manual reapply, which calls the native setter itself rather than any
+  bridge command (Android has no `reapply` bridge command by design:
+  `bridge-main.js` only registers one when a worklet-side `platform` is
+  passed, and Android's worklet never has one). Also found and fixed a
+  second real on-device bug: `MainView`'s nav row rendered underneath the
+  translucent status bar with no safe-area inset (every earlier screen
+  centers its content well below it), which wasn't just cosmetic — taps
+  landing in the overlap silently never reached the tab `Pressable`s at
+  all. Fixed with `useSafeAreaInsets()` (`expo-router`'s `ExpoRoot` already
+  supplies a `SafeAreaProvider`). On-device QA: Android-creates-invite +
+  scripted-peer-redeems eventually succeeded once (proving the
+  candidate/approve UI path) but was slow and a second clean attempt never
+  completed within budget — flagged as a likely emulator-NAT asymmetry
+  (Task 5's proven-fast direction has the emulator as the outbound-dialing
+  candidate, not the inbound-waiting creator), not a code bug, recommended
+  for physical-device follow-up in Task 10. Reapply and the lock-toggle
+  were fully verified via the reverse, proven-fast topology instead: a
+  scripted peer creates the group and sends a wallpaper, Android
+  auto-applies it, Received shows it with a working Re-apply, and flipping
+  the lock-screen toggle then reapplying flipped `adb shell dumpsys
+  wallpaper`'s lock record from an unset placeholder to a real
+  `mWhich=3` (`FLAG_SYSTEM|FLAG_LOCK`) bind matching the applied image's
+  crop — confirmed visually too, via a screencap of an actual (initially
+  disabled, then `locksettings set-disabled false`-enabled) lock screen
+  showing the same test image. `npm run test:ui`: 41/41 (38 carried + 3 new
+  `qr.test.js` cases). `npm run test:worklet`: unchanged, 2/2 tests, 8/8
+  asserts. Full narrative, bug writeups, and screenshots in
+  `docs/notes/qa-android.md` Act 4 and `docs/notes/api-divergences.md`.

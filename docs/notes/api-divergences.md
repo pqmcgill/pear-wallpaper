@@ -790,3 +790,60 @@ verified in a way relevant to this integration point.
   follow-up: either queue pre-ready `'req'` frames in the transport, or
   have `worklet-client.js` await the `'ready'` evt before its first
   `getState` call.
+
+## Task 7 (android-shell): two real UI bugs found via on-device QA, both fixed; one environment limitation flagged, not fixed
+
+- **`MainView`'s nav row rendered underneath the (translucent) status
+  bar, and taps in the overlap silently no-opped.** Every earlier screen
+  (`Onboarding`, `Waiting`) centers its content well below the top of the
+  window; `MainView`'s tab bar was the first content pinned to y=0 with no
+  safe-area inset. Visually, status-bar glyphs bled through the nav text
+  (confirmed by cropping/upscaling a screencap). Functionally — and this
+  is the part worth flagging for whoever touches top-pinned RN content
+  next — taps landing in that overlapped y-range never reached the
+  `Pressable`s at all: a temporary `console.log` in each tab's `onPress`
+  never fired, and repeated `uiautomator dump`s after in-bounds taps
+  showed the previous tab's content unchanged. **Fix**:
+  `useSafeAreaInsets()` (`react-native-safe-area-context`, already a
+  dependency; `expo-router`'s `ExpoRoot` already wraps the tree in a
+  `SafeAreaProvider`, so no extra setup needed) — `nav`'s `paddingTop` is
+  `insets.top + 16`. Full writeup and before/after evidence in
+  `docs/notes/qa-android.md` Act 4.
+
+- **`react-native-svg`'s `SvgXml` makes one native view per SVG element —
+  @paulmillr/qr's one-`<rect>`-per-module output means 1000+ native views
+  for a real invite QR, pegging the UI thread for seconds per frame.**
+  Desktop's `qr.js` hands the same string to a browser DOM
+  (`dangerouslySetInnerHTML`), which renders thousands of `<rect>`s at
+  negligible cost — this divergence is specific to `SvgXml`'s native-view-
+  per-element model, not to `@paulmillr/qr` itself. Confirmed via
+  `node -e` (1052 `<rect>`s for the real invite text) and `adb shell
+  uiautomator dump` (1052 `com.horcrux.svg.RectView`s in the native
+  hierarchy) plus `adb logcat`'s `EGL_emulation app_time_stats` (per-frame
+  times up to ~24s while the QR was on screen). **Fix**: `android/lib/
+  qr.js` still calls the identical `encodeQR(text, 'svg')`, then merges
+  every `<rect>` into a single `<path>` (one `M x y h1v1h-1z` subpath per
+  dark module) before handing the string to `SvgXml` — visually identical,
+  one native view instead of a thousand. Desktop's `qr.js` is untouched.
+  Regression-tested in `test/qr.test.js`. Full writeup in
+  `docs/notes/qa-android.md` Act 4.
+
+- **Flagged, not fixed — likely an emulator NAT/topology limitation, not
+  a Task 7 code bug: Android-as-admitting-member (Android creates the
+  group/invite, a peer joins it) was slow-to-unreliable against the
+  emulator, unlike Task 5's proven-fast reverse direction.** Task 5's
+  topology has the emulator as the outbound-dialing *candidate*; Act 4
+  tried the emulator as the already-swarming *creator* waiting for an
+  *inbound* connection from a scripted peer. One attempt eventually
+  succeeded (several minutes) and proved the UI path end-to-end
+  (candidate-approval row rendered, `approve()` updated the roster); a
+  second clean attempt with a fresh invite and fresh peer identity never
+  completed in ~13 minutes. `adb logcat` has no visibility into the Bare
+  worklet's UDX/Hyperswarm internals to confirm the NAT-asymmetry
+  hypothesis directly, and time-boxing this investigation took priority
+  over chasing it further (per the task's own guidance). Verified the
+  reapply/lock-toggle parts of Act 4 instead via the reverse, proven-fast
+  topology (scripted peer creates + invites, Android joins) — round-
+  tripped in seconds. Recommend a follow-up: exercise the Android-creates
+  direction against a physical device in Task 10's phase, where there is
+  no emulator NAT in the path.

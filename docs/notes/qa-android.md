@@ -463,3 +463,188 @@ reverted before commit.
 
 `npm run test:ui`: 26/26. `npm run test:worklet`: unchanged, 2/2 tests,
 8/8 asserts.
+
+## Act 4 — Main UI: device list, invites, received history, settings (2026-08-23)
+
+New this Act: `components/{DeviceList,Received,Settings}.js` (real tabs
+replacing Task 4's placeholder), `lib/qr.js` (`@paulmillr/qr` + a
+react-native-svg-specific post-process, see bug #2 below), `lib/settings.js`
+(`expo-file-system`-backed `{ lockScreen }` persistence, `getTarget()` wired
+into Task 6's `createApplyController` in `_layout.js`). `react-native-svg`
+added via `npx expo install` (native module) — full rebuild required:
+`npx expo prebuild --platform android --clean` then `npm run android`,
+same as Task 6's `SET_WALLPAPER` permission lesson (`android/android/`
+already existed from prior tasks, so a plain rebuild would have skipped
+re-reading `app.json`). `npm run test:ui`: 41/41 (38 carried + 3 new
+`qr.test.js` cases). `npm run test:worklet`: unchanged, 2/2 tests, 8/8
+asserts.
+
+### Bug found + fixed #1: MainView's nav row rendered underneath the status bar
+
+**Symptom**: on the very first cold-start screencap of the new tabbed
+`MainView`, "Devices"/"Settings" showed faint overlapping glyphs (status
+bar clock digits and signal/battery icons bleeding through the nav text —
+confirmed by cropping and 2x-upscaling the top strip,
+`task-7-nav-statusbar-bug-crop.png`). More than cosmetic: taps landing in
+that overlapped band **never reached the Pressables at all** — every
+"Received"/"Settings" tap silently no-opped (confirmed two ways: repeated
+`uiautomator dump` after a tap in-bounds showed the Devices tab's content
+unchanged, and a temporary `console.log` in each `onPress` never fired in
+the Metro log).
+
+**Root cause**: every earlier screen (`Onboarding`, `Waiting`) centers its
+content well below the status bar; `MainView` was the first screen to pin
+content to the very top of the window with no safe-area inset. The
+translucent system status bar's touch-target area apparently takes
+priority over app content drawn behind it at that y-range, so touches
+there never reached RN's touch responder chain.
+
+**Fix**: `useSafeAreaInsets()` (`react-native-safe-area-context`, already
+a dependency; `expo-router`'s `ExpoRoot` wraps the tree in a
+`SafeAreaProvider` already, so no extra provider setup was needed) —
+`nav`'s `paddingTop` is now `insets.top + 16`. Confirmed fixed: a fresh
+cold-start screencap (`task-7-nav-fixed.png`) shows the nav row clearly
+below the status bar, and the same tap coordinates that previously
+no-opped now switch tabs (`uiautomator dump` showing the target tab's
+content after each tap).
+
+### Bug found + fixed #2: the invite QR pegged the UI thread for seconds per frame
+
+**Symptom**: while investigating bug #1, `adb logcat`'s `EGL_emulation
+app_time_stats` showed per-frame times up to **~24 seconds** while an
+invite QR was on screen, and the whole Devices tab (nav included) was
+unresponsive to touch for that entire window — this compounded bug #1's
+symptoms and made the two easy to conflate at first.
+
+**Root cause**: `@paulmillr/qr`'s `toSVG()` emits one `<rect>` per dark QR
+module — confirmed via `node -e` against the real invite text: **1052
+`<rect>` elements** for a 112-character invite string. Desktop's `qr.js`
+(`desktop/ui/qr.js`) injects that string into an HTML DOM via
+`dangerouslySetInnerHTML`, where a browser renders thousands of `<rect>`s
+at negligible cost. `react-native-svg`'s `SvgXml` instead creates one
+*native* view per SVG element — confirmed via `adb shell uiautomator
+dump`, which showed **1052 `com.horcrux.svg.RectView` native views** in
+the hierarchy for the same invite. Inflating/laying out/rendering that
+many native views per frame is what produced the multi-second frame
+times.
+
+**Fix**: `android/lib/qr.js` calls the exact same `encodeQR(text, 'svg')`
+as desktop, then merges every `<rect>` into a single `<path>` (one `M x y
+h1v1h-1z` subpath per dark module — visually identical, one native
+`PathView` instead of a thousand `RectView`s). Desktop's `qr.js` is
+untouched; this post-process is Android-only, motivated purely by
+`SvgXml`'s one-native-view-per-element cost, not a change to the
+`@paulmillr/qr` call or the function's public contract. Regression
+coverage in `test/qr.test.js` (single `<path>`, zero `<rect>`s, identical
+module coordinates, unchanged `viewBox`). Confirmed fixed on-device: the
+same invite QR now renders instantly (screencap `task-7-invite-and-qr.png`
+taken immediately after the "New invite" tap, no perceptible delay), and
+nav taps taken moments later registered normally.
+
+### Main navigation + Android-created invite (partial — see finding below)
+
+With both bugs above fixed, full Main navigation was confirmed on-device:
+`Devices` (roster + creator-only invite/candidate controls),
+`Received` (empty-state and populated, see below), `Settings` (device
+name/key read-only, lock-screen toggle, `Last synced`, **no**
+"Launch at login" control — `snapshot.loginAtLogin` is genuinely absent
+on Android, confirmed by dumping the raw bridge snapshot shape in
+`test/settings.test.js` and by the on-device screencap
+`task-7-settings-tab.png`).
+
+Android (as group creator) minted a real invite via "New invite"
+(`task-7-invite-and-qr.png` — selectable text plus a correctly-scannable
+`SvgXml` QR). A scripted desktop peer (same `pear-wallpaper-core`-direct
+pattern as Acts 2-3) called `joinGroup(invite)` against it. The candidate
+**did** eventually connect — Android's Devices tab rendered the expected
+"qa4-desktop-peer wants to join" approval row with working Approve/Deny
+(confirmed via `uiautomator dump` text content, and pressing Approve
+updated the roster on Android's side to show the peer as a joined member)
+— but the round trip took several minutes, and a second clean attempt
+(fresh invite, fresh peer identity, ~13 minutes) never completed at all in
+the time budgeted for this Act.
+
+**Finding (flagged, not a Task 7 code bug): Android-as-admitting-member
+over the emulator's NAT is slow/unreliable in this environment.** Task 5's
+proven-fast topology has the emulator as the outbound-dialing *candidate*
+(joining someone else's group); this scenario inverts it — the emulator is
+the already-swarming *creator*, waiting for an *inbound* connection from
+the scripted peer. The emulator's QEMU NAT is a plausible explanation for
+that asymmetry (outbound connections are its well-trodden path; unsolicited
+inbound rendezvous through it is not), though this wasn't instrumented
+further — `adb logcat` has no visibility into the Bare worklet's
+UDX/Hyperswarm internals, and time-boxing this investigation (per the
+task's own guidance) took priority over chasing it further. Recommend a
+follow-up: exercise this exact direction (Android creates, a real second
+device or peer joins) against a physical device in Task 10's phase, where
+there's no emulator NAT in the path.
+
+**What's actually verified**: the DeviceList code paths this scenario
+exercises — `createInvite` → text + QR render, a `candidate` event →
+approval row → `approve(key)` → roster update — all worked correctly when
+the connection did eventually form. The slowness/unreliability is in the
+network rendezvous, not in the Android UI or bridge code added this task.
+
+### Received reapply + lock-toggle → both home and lock (pragmatic topology)
+
+To still exercise `Received`'s reapply and the lock-toggle's effect on a
+real apply — both blocked on *some* working pairing, not specifically the
+Android-creates-invite direction — this sub-Act used the reverse, Task-5-
+proven-fast topology instead: a scripted peer created a group and invite
+(`WallpaperCore.createGroup()`/`createInvite()`), Android pasted it via
+Onboarding's paste field and tapped "Join a group" (identical mechanics to
+Acts 2-3), and the peer auto-approved the resulting `pairing-request`. This
+round-tripped in **seconds**, not minutes — consistent with the NAT-
+asymmetry finding above. Peer log, in order: `PAIRING REQUEST` →
+`ROSTER CHANGED` (joiner online) → `APPROVED` → `SENDING wallpaper` →
+`SENT` → `send-updated ... status: delivered`.
+
+1. **Auto-apply on join.** The peer's `sendWallpaper()` (a distinctive
+   bright-cyan 480×480 test PNG, same synthetic-PNG technique as Task 6's
+   magenta one) landed on Android; Task 6's `createApplyController`
+   auto-applied it via the native setter with no manual step.
+   `adb exec-out screencap -p` after `KEYCODE_HOME`
+   (`task-7-home-wallpaper-cyan.png`) showed the entire home screen — icons,
+   clock, search bar — now the solid cyan test image.
+2. **Received tab.** Showed the delivered item: thumbnail (`Image` with a
+   `file://` URI), the sender-recorded filename, and a "Re-apply" button
+   (`task-7-received-tab.png`).
+3. **Reapply.** Pressed "Re-apply" (target `home`, lock toggle still off at
+   this point). No error banner rendered (a rejection would have shown one,
+   per `test/received.test.js`'s coverage of that path) — the setter
+   resolved cleanly. Same image/target, so no visual delta expected or
+   looked for here; the meaningful proof is the call succeeding with
+   `getTarget()` wired correctly and no bridge/`markApplied` involvement
+   (structurally impossible — `Received` has no `bridge` prop at all).
+4. **Lock toggle → next apply sets lock too.** Flipped "Apply to lock
+   screen too" on in Settings (`task-7-lock-toggle-on.png`; confirmed
+   persisted via `adb shell run-as com.pearwallpaper.app cat
+   files/settings.json` → `{"lockScreen":true}`), then pressed "Re-apply"
+   again. `adb shell dumpsys wallpaper` before vs. after is the clean
+   before/after signal the brief asked for:
+   - **Before** (home-only): two separate wallpaper records — System
+     `id=4 mWhich=1 mBindSource=SET_STATIC mCropHint=Rect(0,0-480,480)`;
+     Lock `id=0 mWhich=2 mBindSource=UNKNOWN mCropHint=Rect(0,0-0,0)` (never
+     explicitly set — the empty crop and `id=0` show it was only ever
+     falling back to System).
+   - **After** (both): a single record, `id=5 mWhich=3
+     mBindSource=SET_STATIC mCropHint=Rect(0,0-480,480)` — `mWhich=3` is
+     `FLAG_SYSTEM(1) | FLAG_LOCK(2)`, i.e. one explicit bind covering both
+     surfaces at once, exactly what `setWallpaper(filePath, 'both')`
+     (`modules/wallpaper-setter`) is supposed to produce.
+   - **Screencap proof**: the AVD's keyguard is disabled by default (a
+     sleep/wake cycle just resumed the app, no distinct lock UI) —
+     `adb shell locksettings set-disabled false` enabled it. A subsequent
+     `KEYCODE_SLEEP`/`KEYCODE_WAKEUP` cycle then showed a genuine lock
+     screen (clock, "Charged", swipe-up unlock affordance) with the same
+     solid cyan image as its background (`task-7-lock-screen-cyan.png`) —
+     visual confirmation matching the dumpsys evidence.
+
+### Cleanup
+
+`pm clear com.pearwallpaper.app` after the Act; all scripted-peer
+processes killed; throwaway `desktop/qa4-*-tmp*.js` and `desktop/qa4-peer-
+resume-tmp.js` scripts deleted (`git status` clean before commit —
+confirmed, only the task's real source/test files and this doc are
+tracked changes). `npm run test:ui`: 41/41. `npm run test:worklet`:
+unchanged, 2/2 tests, 8/8 asserts.

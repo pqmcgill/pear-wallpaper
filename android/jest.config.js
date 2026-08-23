@@ -15,5 +15,18 @@ module.exports = {
   // transform the rest of the app gets. Jest merges preset + local
   // `transform` maps, so this adds a matcher rather than replacing the
   // preset's.
-  transform: { '\\.mjs$': 'babel-jest' }
+  transform: { '\\.mjs$': 'babel-jest' },
+  // Task 7: @paulmillr/qr ships untranspiled ESM (`"type": "module"`,
+  // `export class Bitmap ...`) straight in node_modules, and jest's
+  // default CJS-only transform chokes on the bare `export`. jest config
+  // values don't deep-merge, so un-ignoring it means reproducing
+  // jest-expo's own transformIgnorePatterns override (jest-preset.js) —
+  // copied verbatim below, plus `@paulmillr/qr` added to the allow-list —
+  // rather than react-native's narrower base pattern, which would silently
+  // drop `expo`/`@expo`/etc. and break every other component test that
+  // touches an expo package.
+  transformIgnorePatterns: [
+    '/node_modules/(?!(.pnpm|react-native|@react-native|@react-native-community|expo|@expo|@expo-google-fonts|react-navigation|@react-navigation|@sentry/react-native|native-base|@paulmillr/qr))',
+    '/node_modules/react-native-reanimated/plugin/'
+  ]
 }

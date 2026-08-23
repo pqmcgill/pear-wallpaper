@@ -351,3 +351,41 @@
   `npm run test:ui`: 11/11 pristine; `npm run test:worklet`: 2/2 tests,
   8/8 asserts, unchanged and still green. Full script + evidence in
   `docs/notes/qa-android.md` Act 1.
+- 2026-08-23 Android-shell Task 5: pairing — QR scan + join flow.
+  `components/ScanInvite.js` (`expo-camera`'s `CameraView` +
+  `useCameraPermissions`, latched `onBarcodeScanned` — TDD'd first against
+  a mocked `expo-camera`); "Scan invite" button on `Onboarding` sharing
+  the paste path's join handler; `Waiting` joinError + retry copy.
+  `expo-camera@55.0.22` installed via `npx expo install`, pinned exact;
+  `app.json` plugin entry adds the Android CAMERA permission
+  (`recordAudioAndroid: false` — no mic needed). First real cross-shell
+  pairing milestone: since no desktop GUI was drivable in this session, a
+  scripted Node peer (throwaway, run from `desktop/`, real
+  `WallpaperCore` — same API/events the desktop worker uses, not a mock)
+  stood in for it. Live invite → emulator paste-and-join → scripted
+  peer's `pairing-request` → `approve()` → emulator `Waiting`→`MainView`
+  ("Devices in group: N"), peer's `listDevices()` showing the Android
+  device online — round-tripped twice (before and after the fix below).
+  On-device QA surfaced two real, pre-existing bugs, both fixed in
+  Android's files this task (desktop has the same latent gaps, left
+  unfixed there — out of scope): (1) a LIVE interactive join, not just a
+  restart-resumed one, routes the UI to `Waiting` before `joinGroup()`
+  settles — core's `_onConnection` fires `roster-changed` the instant the
+  joiner's own candidate socket opens — so a live deny was landing
+  `Onboarding`'s local `joinError` on an already-unmounted screen;
+  `dispatch` is now threaded from `app/index.js` into `Onboarding` so the
+  rejection also reaches shared `snapshot.joinError`. (2)
+  `blind-pairing-core`'s coded errors format `Error#message` as
+  `${code}: ${msg}`, not the bare code, so both shells' friendly-message
+  lookup tables (exact-match by code) never actually matched anything;
+  switched to a prefix match. Verified live: a real deny now renders "The
+  creator denied this device." on `Waiting`, not the generic fallback.
+  Also verified: a garbage/undecodable invite never opens a connection,
+  so `Onboarding` stays mounted and shows its own local error correctly.
+  Camera-path QR scan documented for a human with a display (Android
+  Studio's Extended Controls camera-image injection isn't drivable
+  headlessly); the scan step itself is unit-tested in isolation and hands
+  off into the identical, already-verified `attemptJoin`/error path.
+  `npm run test:ui`: 14/14 pristine (11 carried + 3 new); `npm run
+  test:worklet`: unchanged, 2/2 tests, 8/8 asserts. Full script, invite
+  strings, and screenshots described in `docs/notes/qa-android.md` Act 2.

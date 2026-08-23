@@ -622,3 +622,63 @@ transitive path during the original on-device verification (Act 1 in
 `package.json`/lockfile declaration and bumps the resolved patch version,
 it does not change which code runs differently than what was already
 verified in a way relevant to this integration point.
+
+## Task 5 (android-shell): expo-camera API matched the brief exactly
+
+- **Checked against installed `expo-camera@55.0.22`** (`node_modules/expo-camera/build/*.d.ts`,
+  installed via `npx expo install expo-camera` then pinned exact, no `~`).
+  `useCameraPermissions(options?)` returns a 3-tuple
+  `[PermissionResponse | null, requestPermissionAsync, getPermissionAsync]`
+  (`PermissionResponse = { status: 'granted'|'undetermined'|'denied',
+  expires, granted: boolean, canAskAgain: boolean }`) — the brief's
+  "`useCameraPermissions` + request-on-mount" is a correct, if partial,
+  description; only the tuple's first two elements are used here.
+  `CameraView`'s `onBarcodeScanned?: (result: BarcodeScanningResult) =>
+  void` is called directly with the result object (`{ type, data, ... }`),
+  not wrapped in a `{ nativeEvent }` envelope (that shape exists
+  internally in `CameraNativeProps` but isn't what the public JSX prop
+  receives) — so `onBarcodeScanned({ data })` destructuring in
+  `ScanInvite.js` needed no adapter. `barcodeScannerSettings:
+  { barcodeTypes: ['qr'] }` matches the installed type exactly. No code
+  changes were needed beyond what the brief specified.
+- **`app.json` plugin config**: `expo-camera`'s config plugin
+  (`plugin/build/withCamera.js`) accepts `{ cameraPermission,
+  microphonePermission, recordAudioAndroid = true, barcodeScannerEnabled
+  = true }` and auto-adds `android.permission.CAMERA` (+
+  `RECORD_AUDIO` unless `recordAudioAndroid: false`) to the manifest —
+  no manual `android.permissions` array entry needed (contrast Task 6's
+  `SET_WALLPAPER`, which isn't plugin-managed and does need one). Set
+  `recordAudioAndroid: false` here since QR scanning never touches the
+  microphone.
+
+## Task 5 (android-shell): blind-pairing's coded-error `Error#message` format broke both shells' friendly-message lookups
+
+- **Not an expo-camera divergence — a `core`/`blind-pairing-core` one,
+  surfaced only now because this was the first real on-device exercise of
+  a live `joinGroup()` rejection with an actual DHT round trip (prior QA
+  used the REPL, `docs/notes/qa-pairing.md`, or never actually asserted
+  the rendered copy).** `blind-pairing-core/lib/errors.js`'s
+  `PairingError` constructor does `super(`${code}: ${msg}`)` — so
+  `PAIRING_REJECTED`'s `Error#message` is the literal string
+  `'PAIRING_REJECTED: Pairing was rejected'`, not the bare code
+  `'PAIRING_REJECTED'`. `.code` carries the bare value, but
+  `bridge-main`'s command-rejection handler
+  (`transport.send({ ..., error: err.message })`) only ever relays
+  `.message` across the wire — `.code` never reaches either shell's UI.
+  Both `android/components/{Onboarding,Waiting}.js`'s friendly-message
+  tables did an exact-match object lookup keyed by the bare code
+  (`MESSAGES[err.message]`), which therefore never matched
+  `PAIRING_REJECTED`/`INVITE_USED`/`INVITE_EXPIRED` in practice — every
+  coded rejection silently fell through to the generic "Could not join.
+  Ask for a fresh invite." fallback instead of its specific copy.
+  **Fixed on Android** (this task's scope) by matching on
+  `message.startsWith(code)` instead of exact equality — still an exact
+  match for the plain (uncoded) `'superseded by a newer invite'`/`'closed'`
+  messages, since a full-string match is trivially also a prefix match.
+  Verified live: a scripted desktop peer's `deny()` now renders "The
+  creator denied this device." on `Waiting`, confirmed by screenshot
+  (`docs/notes/qa-android.md` Act 2). **`desktop/ui/components/
+  {Onboarding,Waiting}.js` have the identical exact-match bug** (same
+  `JOIN_ERROR_MESSAGES`/`MESSAGES` pattern, same code) — left unfixed
+  there, out of this task's scope; flagging for whoever next touches
+  desktop's pairing UX.

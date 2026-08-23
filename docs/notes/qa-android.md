@@ -94,3 +94,196 @@ the next Act (Task 5's camera/scan work).
 
 `npm run test:ui` (11/11) and `npm run test:worklet` (2/2 tests, 8/8
 asserts) both green in the same tree.
+
+## Act 2 — QR scan + join flow; first cross-platform pair (2026-08-23)
+
+New this Act: `components/ScanInvite.js` (`expo-camera`'s `CameraView` +
+`useCameraPermissions`, latched `onBarcodeScanned`), a "Scan invite" button
+on `Onboarding`, and `joinError` display + retry copy on `Waiting`. Full
+rebuild required (`npm run android`) since `expo-camera` adds a native
+Kotlin module and a manifest permission — a JS-only reload isn't enough for
+that part. `npm run test:ui`: 14/14 (11 carried over + 3 new
+`scan-invite.test.js` cases: latch on repeated `onBarcodeScanned`,
+`barcodeScannerSettings: {barcodeTypes:['qr']}`, and permission-denied
+fallback + cancel). `npm run test:worklet`: unchanged, 2/2 tests, 8/8
+asserts.
+
+**No desktop GUI in this session.** Per the milestone's own logic (an
+admitting member just needs to be *online*, not necessarily the packaged
+Electron app), Act 2's cross-platform proof uses a scripted stand-in for
+the desktop: a throwaway Node script run from `desktop/` (so it resolves
+`desktop/node_modules/pear-wallpaper-core`, a symlink to `../core`) that
+calls the exact same `WallpaperCore` API the desktop worker calls —
+`new WallpaperCore({ storageDir, deviceName: 'qa-desktop' })` →
+`ready()` → `createGroup()` → `createInvite()` → print it → listen for
+`pairing-request` → `approve()`/`deny()` → print `listDevices()` on
+`roster-changed`. This is a legitimate group peer, not a mock — same
+Autobase/Corestore/Hyperswarm stack, same events, same gate. The **real**
+human path this substitutes for (documented per the brief, not run here):
+on a Mac with a display, `cd desktop && npm run dev`, click "Create a
+group" in the Electron window, and `DeviceList` renders the invite as text
++ QR (via `qrSvg`) instead of printing to a terminal.
+
+### Setup
+
+```bash
+# Terminal A — scripted desktop peer (see docs/notes/qa-pairing.md for the
+# equivalent raw-REPL version this mirrors)
+cd desktop && node qa-desktop-peer.js   # throwaway script, not committed
+
+# Terminal B — emulator
+export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
+export ANDROID_HOME="$HOME/Library/Android/sdk"
+export PATH="$PATH:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator"
+adb shell pm clear com.pearwallpaper.app && adb shell am start -n com.pearwallpaper.app/.MainActivity
+```
+
+**adb coordinate gotcha hit live:** screenshots read back into this
+session are shown scaled (900×2000 preview of a real 1080×2400 device) —
+tapping at the *preview's* pixel coordinates instead of multiplying by
+the 1.2 scale factor landed a "Join a group" tap on "Create a group"
+instead the first time, silently creating a solo group on the device
+rather than joining. Recovered by `pm clear` and redoing the tap with
+real-device coordinates (`adb shell wm size` → `1080x2400`). Recorded
+here since it's an easy trap for any future adb-driven QA on this
+project.
+
+### Happy path — invite → candidate → approval → roster sync
+
+1. Terminal A printed a real invite string, e.g.
+   `yrb9az5kik43j9sdsrfir5ob4uiqqeqqmcypnfw7xgu749aso3ope7bhuugha7bsjbgr4j6c88k35gpqk6g1dfkudaq6qru8kzup4h6mqc4g9ddk`.
+2. On the emulator: tapped the "Paste invite" field, `adb shell input text
+   "<invite>"`, dismissed the keyboard (`input keyevent 111`), tapped
+   "Join a group".
+3. Terminal A logged, in order: `=== ROSTER CHANGED ===` (the joiner's
+   candidate connection opening — see the "Waiting during a live join"
+   finding below), `=== PAIRING REQUEST ===` with the candidate's key and
+   `name: 'sdk_gphone64_arm64'` (the emulator's `Device.modelName`,
+   matching Task 4's worklet-client init frame), then `approving...`,
+   then a second `=== ROSTER CHANGED ===` showing both devices with the
+   phone `online: true`, then `approved <candidateKey>`.
+4. The emulator screen transitioned straight to `MainView`'s placeholder:
+   **"Devices in group: 2"**. Screenshot evidence:
+   `qa2-joining2.png` (not committed, gitignored scratch dir).
+5. Re-verified end-to-end a second time after the fix below (see next
+   section) with a fresh invite: same result, **"Devices in group: 3"**
+   (the extra count is stale roster entries from earlier attempts in this
+   same QA session — the scripted peer's group was reused across
+   sub-Acts, never revoked; not a bug, just accumulated test fixtures).
+
+This is the milestone: a real QR-able invite string minted by one shell
+(standing in for desktop), consumed by the Android emulator's real
+`joinGroup()` over the real DHT, redeemed as a blind-pairing candidate,
+approved by a human-equivalent gate on the other shell, and settled into
+a synced two-(then three-)device roster on both sides.
+
+### Finding + fix: live joins route through Waiting too, and its error map never matched
+
+While exercising the deny path (below), discovered two real bugs — fixed
+in this Act, not just observed:
+
+1. **`Waiting`, not `Onboarding`, is what's mounted when a live join is
+   rejected.** The existing code comment (mirrored from
+   `desktop/ui/app.js`) assumed an interactive `joinGroup()` call keeps
+   `Onboarding` mounted for its whole duration, so rejections could be
+   handled entirely in its local state. That's wrong: `core/index.js`'s
+   `_onConnection` fires `roster-changed` the moment a gated connection
+   opens on *either* side — including the joiner's own candidate socket,
+   well before `joinGroup()`'s promise settles. `bridge-main` forwards
+   that as a `state` push with `groupStatus: 'joining'`, so `app/index.js`
+   routes to `Waiting` immediately, unmounting `Onboarding`. Reproduced by
+   denying a live candidate: the emulator was left on a bare "Waiting for
+   an existing device…" screen with no error, forever — `Onboarding`'s
+   `catch` had set `joinError` on a component nobody could see.
+   **Fix:** `app/index.js` now passes `dispatch` to `Onboarding`;
+   `attemptJoin`'s catch also dispatches the raw rejection into shared
+   `snapshot.joinError` (the store's existing `'error'` reducer case
+   already routes it there whenever `groupStatus === 'joining'`, which by
+   then it is). Local `joinError` state is kept too, for the case that
+   never opens a real connection (garbage invite, below) where
+   `Onboarding` genuinely does stay mounted.
+2. **The friendly-message lookup tables never matched.**
+   `blind-pairing-core`'s coded errors format `Error#message` as
+   `` `${code}: ${msg}` `` (e.g. `'PAIRING_REJECTED: Pairing was
+   rejected'`), not the bare code, and `bridge-main`/`bridge-ui` only
+   relay `.message` across the wire (`.code` is dropped). Both
+   `Onboarding`'s `JOIN_ERROR_MESSAGES` and `Waiting`'s `MESSAGES` did an
+   exact-match object lookup keyed by the bare code, so every rejection
+   silently fell through to the generic fallback text. This bug is also
+   present in `desktop/ui/components/{Onboarding,Waiting}.js` (same
+   exact-match pattern) — not fixed there in this task, out of scope, but
+   worth flagging for a follow-up.
+   **Fix (Android only, per this task's scope):** both lookups now match
+   by prefix (`message.startsWith(code)`), which also still exact-matches
+   the plain `'superseded by a newer invite'`/`'closed'` messages.
+   Confirmed live: after the fix, a real deny renders **"The creator
+   denied this device."** on `Waiting`, not the generic fallback.
+
+`docs/superpowers/plans/2026-08-23-android-shell.md`'s Task 5 brief listed
+only `Onboarding.js`/`Waiting.js`/`app.json`/`package.json`/this file as
+files to modify; `app/index.js` was touched too, narrowly, to thread
+`dispatch` — necessary for the brief's own explicit QA scenario ("deny →
+Waiting shows rejection") to actually be true rather than asserted.
+
+### Deny path
+
+Fresh invite from Terminal A, script denies instead of approves
+(`core.deny(candidateKey)`). Live candidate key logged, e.g.
+`43ab363fbd2957f05b066f3606e6c1018eae1e2c5c399ca3cfd464efd54ef884`.
+Emulator: routed to `Waiting` (per the finding above) mid-flight, then
+settled on **"The creator denied this device."** with the new retry copy
+**"Ask the creator for a fresh invite, then restart the app and paste it
+to try again."** below it. `ErrorBanner` also appeared at the top showing
+the raw `"PAIRING_REJECTED: Pairing was rejected"` — a pre-existing,
+unrelated cosmetic gap (no `SafeAreaView` anywhere in this app, so
+`ErrorBanner`, the one element pinned to the very top, overlaps the status
+bar; every other screen has enough top whitespace to hide the same gap).
+Out of scope for this task; noted for a future polish pass.
+
+### Garbage invite
+
+Typed `not-a-real-invite-garbage-string-1234` into the paste field and
+pressed "Join a group". This never opens a real connection (not
+z32-decodable to a real discovery key), so no `roster-changed` fires and
+`Onboarding` stays mounted throughout — its own local `joinError` state
+rendered **"Could not join. Ask for a fresh invite."** directly under the
+"Join a group"/"Scan invite" buttons, as designed.
+
+### Camera path — human-only, documented not automated
+
+Per the environment brief, the emulator's virtual-scene camera image can
+only be loaded through the Android Studio Emulator Extended Controls GUI
+(Camera → Virtual scene → Add image), which isn't drivable headlessly in
+this session, and this session has no way to render the desktop's actual
+QR `<svg>` to a screen for the emulator's camera to see in the first
+place. Not attempted; the real human procedure, for whoever runs this
+next with a display:
+
+1. `cd desktop && npm run dev`, create a group, open `DeviceList`,
+   "Create invite" — renders both the raw invite string and a QR `<svg>`
+   (`qrSvg`, `desktop/ui/qr.js`).
+2. Screenshot that QR.
+3. Android Studio's Emulator → Extended controls → Camera → Virtual
+   scene → load the screenshot as the scene's poster image.
+4. In the app, "Scan invite" → grant camera permission → point the
+   emulated camera at the virtual-scene image bearing the QR.
+5. `ScanInvite`'s `onBarcodeScanned` should latch on the first decode
+   (unit-tested in `scan-invite.test.js`) and call `onScanned`, which
+   routes into the identical `attemptJoin` the paste path uses — same
+   approve/deny/error behavior as verified above, just a different way to
+   get the invite string into the app.
+
+The paste path (Acts above) already exercises every downstream behavior
+`ScanInvite` hands off to (`attemptJoin`, `Waiting`, error copy); the
+camera adds only the scan step itself, which is unit-tested in isolation
+(mocked `expo-camera`) rather than device-QA'd this round.
+
+### Cleanup
+
+`adb shell pm clear com.pearwallpaper.app` after each sub-Act (fresh
+`groupStatus: 'none'`/Onboarding for whoever runs next); scripted desktop
+peer processes killed; throwaway `desktop/qa-desktop-peer*.js` scripts
+deleted (never committed — `git status` clean before commit).
+
+`npm run test:ui`: 14/14 pristine. `npm run test:worklet`: unchanged, 2/2
+tests, 8/8 asserts.

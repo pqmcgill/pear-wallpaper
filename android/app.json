@@ -35,6 +35,13 @@
           }
         }
       ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Pear Wallpaper to access your camera to scan an invite QR code.",
+          "recordAudioAndroid": false
+        }
+      ],
       "./plugins/withGradleJvmFix"
     ]
   }

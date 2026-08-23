@@ -63,8 +63,21 @@ export default function Layout () {
     // worklet's Bare fs (core.sendWallpaper's readFile) cannot open a
     // content:// URI at all, only expo-file-system's RN-side File/Directory
     // classes can. Route params carry the staged path to /send.
-    const filePath = stageSharedImage(file.path)
-    router.replace({ pathname: '/send', params: { filePath } })
+    //
+    // source.copy(dest) inside stageSharedImage throws SYNCHRONOUSLY, not
+    // just on missing files — a share URI's grant can die between the share
+    // sheet and this effect (revoked SAF grant, provider hiccup, an
+    // unmaterialized cloud-backed image), and that's a real-world condition
+    // on this user-initiated mainline path, not an edge case to let crash
+    // the app. Must degrade to the existing error banner, never navigate to
+    // /send with nothing staged, and never let the throw escape this effect.
+    try {
+      const filePath = stageSharedImage(file.path)
+      router.replace({ pathname: '/send', params: { filePath } })
+    } catch (err) {
+      console.warn('[share-intent] failed to stage shared image:', err && err.message)
+      dispatch({ type: 'error', payload: { message: `Couldn't open the shared image: ${err.message}` } })
+    }
   }, [hasShareIntent])
 
   // Task 9: register the bounded background round. minimumInterval is in

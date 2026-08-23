@@ -1,0 +1,18 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'com.pearwallpaper.wallpapersetter'
+version = ''
+
+android {
+  namespace "com.pearwallpaper.wallpapersetter"
+  defaultConfig {
+    versionCode 1
+    versionName ""
+  }
+  lintOptions {
+    abortOnError false
+  }
+}

@@ -287,3 +287,179 @@ deleted (never committed — `git status` clean before commit).
 
 `npm run test:ui`: 14/14 pristine. `npm run test:worklet`: unchanged, 2/2
 tests, 8/8 asserts.
+
+## Act 3 — WallpaperManager Expo module + apply controller; first cross-platform wallpaper apply (2026-08-23)
+
+New this Act: `android/modules/wallpaper-setter/` (a local Expo Module,
+scaffolded via `npx create-expo-module@latest --local wallpaper-setter`,
+autolinked from `modules/` with no npm package — see
+`docs/notes/api-divergences.md` for the generated-layout divergences),
+`lib/apply-controller.js` (`createApplyController`, coalesced-pass
+`applyPending()` mirroring `sync-engine.applyPending`'s semantics exactly),
+and wiring in `app/_layout.js`: the controller runs after every `state`
+push and once after the initial `getState`, `getTarget` hardcoded to
+`'home'`. `app.json` gained `android.permissions:
+["android.permission.SET_WALLPAPER"]`. `npm run test:ui`: 26/26 (23
+carried over + 3 new `apply-controller.test.js` cases: in-order
+setter-then-markApplied, a setter failure leaves the item unacked, and
+concurrent triggers coalesce to exactly one queued rerun). `npm run
+test:worklet`: unchanged, 2/2 tests, 8/8 asserts.
+
+Native module added ⇒ full rebuild, not just a Metro reload
+(`npm run android`).
+
+### Setup
+
+Same scripted-desktop-peer pattern as Act 2, extended to also send a
+wallpaper: `desktop/qa-peer-tmp.js` (throwaway, not committed) —
+`createGroup()` → `createInvite()` → on `pairing-request`, `approve()` →
+once the joiner's roster entry shows `online: true`, `sendWallpaper(imagePath,
+[joiner.key])` → poll `listSends()` until the target's status flips to
+`'delivered'` (the ack round-trip proof: `markApplied` on the phone ->
+`send-updated` on the desktop). Test image: a distinctive 480×480 solid
+bright-magenta PNG, hand-built with raw PNG chunks + `zlib.deflateSync`
+(`scratchpad/gen-png.js`, throwaway) — unmistakable against the emulator's
+default light wallpaper.
+
+```bash
+# Terminal A — scripted desktop peer, extended for Act 3
+cd desktop && node qa-peer-tmp.js /path/to/qa-wallpaper.png
+
+# Terminal B — emulator, same env exports as Acts 1-2
+adb -s emulator-5554 shell input tap <paste-field-x> <paste-field-y>
+adb -s emulator-5554 shell input text "<invite>"
+adb -s emulator-5554 shell input keyevent 4   # dismiss keyboard
+adb -s emulator-5554 shell input tap <join-button-x> <join-button-y>
+```
+
+### Bug found + fixed: `app.json`'s `android.permissions` never reached the built APK
+
+**Symptom**: after wiring the controller and adding
+`android.permissions: ["android.permission.SET_WALLPAPER"]` to
+`app.json`, then running `npm run android`, pairing and blob delivery
+both worked (confirmed via temporary `console.log` instrumentation — see
+below), but every `setWallpaper()` call rejected:
+`SecurityException: Access denied to process: 8286, must have permission
+android.permission.SET_WALLPAPER`. `adb shell dumpsys package
+com.pearwallpaper.app` confirmed the installed APK's manifest had no
+`SET_WALLPAPER` entry at all, despite `app.json` listing it.
+
+**Root cause**: `android/android/` is CNG-regenerated, gitignored output
+(`android/.gitignore`: `android/`), but `expo run:android` only runs
+`expo prebuild` when that directory is *absent* — if it already exists
+(as it did, carried over from Tasks 1-5), `npm run android` just
+rebuilds/reinstalls the existing native project and never re-reads
+`app.json`'s `android.permissions` field into the manifest. (Contrast
+with `expo-camera` in Task 5: that permission came for free via Gradle's
+manifest merger pulling in `expo-camera`'s own library
+`AndroidManifest.xml` — unrelated to `app.json` entirely, so Task 5 never
+hit this gap.)
+
+**Fix**: `npx expo prebuild --platform android --clean` (regenerates
+`android/android/` from `app.json` + the local module) before the
+rebuild. Confirmed via `grep -n "uses-permission"
+android/android/app/src/main/AndroidManifest.xml` (now lists
+`SET_WALLPAPER`) and `adb shell dumpsys package com.pearwallpaper.app`
+(`android.permission.SET_WALLPAPER: granted=true`) after reinstalling.
+Documented in `docs/notes/api-divergences.md` for whoever next adds an
+`app.json`-only permission on a machine where `android/android/` already
+exists.
+
+**How it was found**: temporary `console.log('[QA-DEBUG] ...')` lines in
+`apply-controller.js`, `modules/wallpaper-setter/index.js`, and
+`_layout.js`'s `state` handler (all reverted before commit — `git diff`
+confirmed clean), plus running `npx expo start --dev-client` with its
+stdout redirected to a file (`nohup ... &`, `disown`, so it survives the
+bash tool's ephemeral shell) rather than piped straight into a
+short-lived tool call — RN's `console.log` in this dev-client setup goes
+to the Metro terminal, not `adb logcat` (confirmed: zero `ReactNativeJS`
+lines in a full `adb logcat` capture across an entire pairing+send
+cycle). This is the practical answer to "check `adb logcat -s bare` for
+the sync trace" — `-s bare` filters for a tag that doesn't appear in this
+topology; the real signal is Metro's own log.
+
+### Finding (flagged, not fixed — pre-existing, outside Task 6's scope): a resumed group can leave the UI stuck on `Onboarding`
+
+While iterating on the permission fix above, repeated `am force-stop`
++ `am start` cycles against an app that already had a *persisted* group
+membership (from an earlier successful pairing this session) left the UI
+showing `Onboarding` indefinitely, even though the core was genuinely a
+member — confirmed by tapping "Join a group" again and getting `joinGroup
+REJECTED already in a group` in the Metro log (`core.groupStatus`
+returns `'member'` off the exact same `this.base !== null` check
+`joinGroup()` uses, so the core-side state was never in doubt).
+
+**Likely cause**: `worklet/host.js` awaits `core.ready()` — which, for a
+device resuming a persisted group, does `_boot()` +
+`await this.base.ready()` + `await this.blobs.ready()` +
+`await this._startSwarm()` before it resolves — *before* wiring up
+`bridge-main`'s request handler (`createBridgeMain(...).start()`, which
+calls `transport.onMessage(...)` to register the handler that answers
+`'req'` messages). `_layout.js` fires `bridge.call('getState')`
+immediately on mount, with no wait for a `'ready'` evt first. The
+transport (`bridge/transport/duplex-json.js`) has no queueing — a
+message that arrives before any handler recognizes it is simply
+dropped, matched against whatever's in the handler list *at delivery
+time*. If the RN side's `getState` request lands before `core.ready()`'s
+resume finishes (plausible: swarm bootstrap is a real network op), that
+request is silently lost — its promise never resolves, so `_layout.js`'s
+`.then()` never dispatches, and the initial snapshot stays `groupStatus:
+'none'`. Nothing else naturally re-pushes state afterward unless some
+external event fires (a new roster change, a new send) — a resumed
+autobase that's already fully caught up doesn't emit `'update'` on its
+own.
+
+**Why this is out of scope for Task 6**: it's a Task 1/4 wiring gap
+(bridge-main's request handling vs. `worklet-client.js`'s unconditional
+immediate `getState` call), not anything in the apply-controller or
+native module this task added. `pm clear`-ing between every fresh QA
+attempt (the normal pattern, followed in Acts 1-2 and everywhere else in
+Act 3) never resumes a persisted group, so the race is never hit in the
+documented happy paths above — it only surfaced because this session's
+own debugging repeatedly relaunched an app that already had
+Act-3-created group state on disk. Flagged here and in
+`docs/notes/api-divergences.md` for a follow-up task; not fixed.
+
+### Happy path — fresh pair, send, visible apply
+
+Fully clean run (`pm clear` first): scripted peer creates a group,
+mints an invite; invite pasted into the emulator's `Onboarding`, "Join a
+group" tapped; peer's `pairing-request` handler approves immediately.
+Peer log, in order: `roster-changed` (creator alone), `pairing-request`
+from `sdk_gphone64_arm64`, `roster-changed` (both devices, joiner
+`online: true`), then automatically (per the script) `sendWallpaper()`
+targeting the joiner's key:
+
+```
+SENT id= c67356a9a82460f5fe90f7f52ca11f19
+send status: pending
+send-updated c67356a9a82460f5fe90f7f52ca11f19
+send status: delivered
+DELIVERED — ack round-tripped
+```
+
+`FINAL listSends()` confirmed the single target's status as
+`"delivered"` — the `markApplied` ack genuinely round-tripped back to the
+sender, not just a local "we think it worked" on the phone.
+
+**Visible wallpaper change**: `adb shell input keyevent KEYCODE_HOME`
+immediately after, then `adb exec-out screencap -p`. Before
+(`.superpowers/sdd/2026-08-23-android-shell/task-6-home-wallpaper-before.png`):
+the emulator's stock light blue/white gradient wallpaper. After
+(`.../task-6-home-wallpaper-after.png`): the entire home screen — behind
+the clock, the app icons, the search bar — is now the solid bright
+magenta test image, an unambiguous, unmissable change. This is the
+milestone: a desktop peer's `sendWallpaper()` call visibly changed the
+Android home screen's actual system wallpaper via `WallpaperManager`.
+
+### Cleanup
+
+Same as Acts 1-2: `pm clear` between attempts, scripted peer processes
+killed, throwaway `desktop/qa-peer-tmp.js` / `desktop/qa-control-tmp.js`
+/ `scratchpad/gen-png.js` deleted or left outside the repo (`git status`
+clean before commit — confirmed). Temporary `[QA-DEBUG]` `console.log`
+lines added mid-session for the permission-bug investigation were all
+reverted before commit.
+
+`npm run test:ui`: 26/26. `npm run test:worklet`: unchanged, 2/2 tests,
+8/8 asserts.

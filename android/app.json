@@ -22,7 +22,8 @@
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "package": "com.pearwallpaper.app"
+      "package": "com.pearwallpaper.app",
+      "permissions": ["android.permission.SET_WALLPAPER"]
     },
     "plugins": [
       ["expo-router"],

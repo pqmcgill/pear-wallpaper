@@ -682,3 +682,111 @@ verified in a way relevant to this integration point.
   `JOIN_ERROR_MESSAGES`/`MESSAGES` pattern, same code) — left unfixed
   there, out of this task's scope; flagging for whoever next touches
   desktop's pairing UX.
+
+## Task 6 (android-shell): `create-expo-module --local` generated layout, and two real bugs found via on-device QA
+
+- **`create-expo-module@latest --local` generated layout matches the
+  brief's sketch closely, with a few divergences.** Running `npx
+  create-expo-module@latest --local --name WallpaperSetter --package
+  com.pearwallpaper.wallpapersetter -p android ... wallpaper-setter`
+  from `android/` requires every CLI flag to be passed explicitly
+  (`--name`, `--package`, `--description`, `--author-*`, `--repo`,
+  `--license`, `--module-version`, `--package-manager`) — running it with
+  fewer flags and letting it prompt interactively fails outright in a
+  non-TTY session (`ReferenceError: repo is not defined` inside its EJS
+  template rendering, since the interactive prompt for `--repo` never
+  ran). Generated layout: `modules/wallpaper-setter/android/src/main/
+  java/com/pearwallpaper/wallpapersetter/WallpaperSetterModule.kt` (exact
+  path the brief predicted) plus a *View* example
+  (`WallpaperSetterView.kt`, `src/WallpaperSetterView.tsx`/`.web.tsx`) and
+  a TypeScript module wrapper (`src/WallpaperSetterModule.ts`, importing
+  `NativeModule`/`requireNativeModule` from the `expo` package, not
+  `expo-modules-core` as the brief's JS sketch used — both resolve since
+  `expo` re-exports `expo-modules-core`'s primitives, but `expo` is the
+  ground-truth generated import). `expo-module.config.json` also listed
+  `"platforms": ["apple", "android", "web"]` and an `apple.modules` entry
+  despite `-p android` being passed — no `ios/` directory was actually
+  generated, so this looks like a template-metadata artifact rather than
+  a real multi-platform scaffold; trimmed to `"platforms": ["android"]`
+  since this app is Android-only. **Deleted before writing the real
+  module**: the entire generated `src/` directory (View example + its
+  TS types + web fallback) and `android/.../WallpaperSetterView.kt` —
+  YAGNI, this task needs exactly one `AsyncFunction`, no native view.
+  Replaced with a single top-level `index.js` (plain JS, matching the
+  rest of this codebase, which has no other `.ts` files) using the
+  brief's exact `requireNativeModule('WallpaperSetter')` shape, made
+  **lazy** (resolved on first `setWallpaper()` call, not at module load)
+  — `requireNativeModule()` throws under `jest`/`jest-expo` (no native
+  module registered in that test environment), and `smoke.test.js`
+  imports `app/index.js` → `app/_layout.js` → this file at module-eval
+  time regardless of whether any test path ever calls `setWallpaper()`;
+  eager resolution broke that test until made lazy. No `package.json`
+  exists inside `modules/wallpaper-setter/` at all — a `--local` module
+  isn't an npm package, so JS code imports it by relative path
+  (`'../modules/wallpaper-setter'`), Node/Metro resolution falling back
+  to `index.js`; the **Android** half autolinks separately, purely via
+  `expo-module.config.json`'s `android.modules` list (fully qualified
+  Kotlin class names) — `expo-modules-autolinking`'s default search
+  path already includes the app's own `modules/` directory, no
+  `android/settings.gradle`/`build.gradle` edits needed (confirmed via
+  `./gradlew :app:dependencies | grep wallpaper-setter`, which showed
+  `project :wallpaper-setter` wired in automatically).
+
+- **`app.json`'s `android.permissions` is silently ignored by `expo
+  run:android` once `android/android/` already exists on disk** — even
+  though that directory is CNG-regenerated, gitignored output
+  (`android/.gitignore: android/`). `expo run:android` only invokes
+  `expo prebuild` when the native directory is *absent*; if it's already
+  there (true here from Tasks 1-5's builds), `npm run android` just
+  rebuilds the existing native project and never re-syncs `app.json`
+  into it. Contrast Task 5's `expo-camera` permission, which needed no
+  `app.json.android.permissions` entry at all — it arrives for free via
+  Gradle's manifest merger pulling in `expo-camera`'s own library
+  `AndroidManifest.xml` (`<uses-permission
+  android:name="android.permission.CAMERA"/>`), a mechanism entirely
+  independent of `app.json`. Adding `SET_WALLPAPER` to `app.json` this
+  task and rebuilding with plain `npm run android` produced a debug APK
+  whose merged manifest genuinely had no `SET_WALLPAPER` entry — every
+  `setWallpaper()` call rejected at runtime with `SecurityException:
+  Access denied to process: <pid>, must have permission
+  android.permission.SET_WALLPAPER`, confirmed via `adb shell dumpsys
+  package com.pearwallpaper.app`. **Fix**: `npx expo prebuild --platform
+  android --clean` before rebuilding, whenever an `app.json`-only
+  (non-plugin-managed) Android permission changes and `android/android/`
+  already exists from a prior task's build. Full detail + evidence in
+  `docs/notes/qa-android.md` Act 3.
+
+- **`adb logcat -s bare` (from the brief's own suggested verification
+  step) shows nothing useful in this Expo dev-client topology.** JS-side
+  `console.log` in this `expo run:android` + Metro dev-client setup is
+  forwarded to the Metro terminal over the dev socket, not to `adb
+  logcat` at all — confirmed by capturing a full, unfiltered `adb logcat`
+  across an entire pairing+send cycle and finding zero `ReactNativeJS`
+  lines for the app's process. The practical equivalent of "check the
+  sync trace" on this stack is reading Metro's own log (started
+  detached: `npx expo start --dev-client > metro.log 2>&1 & disown`, so
+  it survives the tool session and its `LOG [...]` lines can be tailed).
+
+- **A resumed-group race can strand the UI on `Onboarding` — found,
+  flagged, not fixed (pre-existing, outside this task's scope).**
+  `worklet/host.js` awaits `core.ready()` (which, resuming a persisted
+  group, reboots the autobase/blobs/swarm) *before* wiring up
+  `bridge-main`'s request handler. `_layout.js` fires
+  `bridge.call('getState')` immediately on mount with no wait for a
+  `'ready'` evt. `bridge/transport/duplex-json.js`'s `onMessage` has no
+  queueing — a `'req'` arriving before any handler is registered for it
+  is simply dropped (matched against whichever handlers exist in the
+  array *at delivery time*, then gone). If the resume is slow enough
+  (real swarm bootstrap), that first `getState` is lost forever, and
+  nothing else naturally re-pushes state for an already-caught-up
+  resumed autobase — the UI can stay on `Onboarding` indefinitely despite
+  the core genuinely being `'member'` (confirmed live: tapping "Join a
+  group" again yielded `joinGroup` rejecting with `'already in a
+  group'`, proving `core.base !== null` the whole time). Only surfaces
+  when an app with *persisted* group state is relaunched and the resume
+  race is lost — every documented happy path in this file's Acts
+  `pm clear`s first, so it was never hit until this task's own iterative
+  debugging relaunched an app with real leftover state. Recommend a
+  follow-up: either queue pre-ready `'req'` frames in the transport, or
+  have `worklet-client.js` await the `'ready'` evt before its first
+  `getState` call.

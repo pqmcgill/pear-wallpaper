@@ -389,3 +389,35 @@
   `npm run test:ui`: 14/14 pristine (11 carried + 3 new); `npm run
   test:worklet`: unchanged, 2/2 tests, 8/8 asserts. Full script, invite
   strings, and screenshots described in `docs/notes/qa-android.md` Act 2.
+- 2026-08-23 Android-shell Task 6: WallpaperManager Expo module + apply
+  controller — first cross-platform wallpaper apply. `lib/apply-controller.js`
+  (`createApplyController`) mirrors `sync-engine.applyPending`'s coalesced-pass
+  semantics exactly, just over two bridge commands instead of direct core
+  calls: `pendingWallpaper()` → `setWallpaper(filePath, target)` (native) →
+  `markApplied(id)`, a setter/ack failure leaving the item unacked for the
+  next trigger. Native side: `android/modules/wallpaper-setter/`, a local
+  Expo Module (`create-expo-module --local`, autolinked from `modules/`
+  with no npm package) wrapping `WallpaperManager.setStream` in one
+  `AsyncFunction`. Wired in `_layout.js`: the controller runs after every
+  bridge `state` push and once after the initial `getState`; `getTarget`
+  hardcoded to `'home'` until Task 7's settings module. On-device QA (fresh
+  pair via the Task 5 scripted-peer pattern, extended to `sendWallpaper()` a
+  distinctive magenta test PNG) found and fixed one real bug before the
+  milestone worked: `app.json`'s `android.permissions` never reached the
+  built APK, because `expo run:android` only runs `prebuild` when
+  `android/android/` (gitignored, CNG output) is absent — since it already
+  existed from prior tasks, the new `SET_WALLPAPER` permission was silently
+  dropped until an explicit `npx expo prebuild --platform android --clean`.
+  Also found and flagged (not fixed, pre-existing, outside this task's
+  scope): a resumed group's very first `getState` request can race ahead of
+  `core.ready()`'s swarm-bootstrap and be silently dropped by the
+  transport's queueless `onMessage`, stranding the UI on `Onboarding`
+  despite the core genuinely being a member. Milestone confirmed: the
+  desktop peer's `listSends()` showed the target status flip to
+  `'delivered'` (ack round-tripped), and the emulator's home-screen
+  screencap changed from the stock wallpaper to the solid magenta test
+  image. `npm run test:ui`: 26/26 (23 carried + 3 new
+  `apply-controller.test.js` cases). `npm run test:worklet`: unchanged, 2/2
+  tests, 8/8 asserts. Full narrative, bug writeups, and before/after
+  screenshots in `docs/notes/qa-android.md` Act 3 and
+  `docs/notes/api-divergences.md`.

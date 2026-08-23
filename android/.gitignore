@@ -2,7 +2,16 @@ node_modules/
 .expo/
 dist/
 ios/
-android/
+# Anchored (not bare `android/`): a bare pattern matches a directory named
+# "android" at ANY depth, which would also swallow local Expo modules'
+# hand-written `modules/*/android/` source trees (e.g. wallpaper-setter's
+# Kotlin) — those must stay tracked even though the top-level CNG-generated
+# native project here must not be.
+/android/
+# Local Expo modules' own Gradle build output (e.g.
+# modules/wallpaper-setter/android/build/) — their source must stay
+# tracked (see /android/ note above), but not the compiled artifacts.
+modules/*/android/build/
 npm-debug.*
 *.jks
 *.p8

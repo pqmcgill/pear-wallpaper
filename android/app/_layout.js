@@ -3,6 +3,8 @@ import { AppState } from 'react-native'
 import { Slot } from 'expo-router'
 import { reduce, initialSnapshot } from '../lib/store'
 import { getBridge, getWorklet } from '../lib/worklet-client'
+import { createApplyController } from '../lib/apply-controller'
+import { setWallpaper } from '../modules/wallpaper-setter'
 
 // Default value covers the case where a screen is rendered outside this
 // provider (e.g. a unit test that mounts app/index.js directly): bridge is
@@ -21,11 +23,21 @@ export default function Layout () {
     const bridge = getBridge()
     setBridge(bridge)
 
-    bridge.on('state', (payload) => dispatch({ type: 'state', payload }))
+    // getTarget hardcoded to 'home' until Task 7 wires a settings module for
+    // the lock-screen toggle.
+    const controller = createApplyController({ bridge, setter: setWallpaper, getTarget: () => 'home' })
+
+    bridge.on('state', (payload) => {
+      dispatch({ type: 'state', payload })
+      controller.applyPending()
+    })
     bridge.on('error', (payload) => dispatch({ type: 'error', payload }))
 
     bridge.call('getState')
-      .then((payload) => dispatch({ type: 'state', payload }))
+      .then((payload) => {
+        dispatch({ type: 'state', payload })
+        controller.applyPending()
+      })
       .catch((err) => dispatch({ type: 'error', payload: { message: err.message } }))
 
     // AppState suspend/resume — the RN-side lifecycle duty the desktop

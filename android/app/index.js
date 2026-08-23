@@ -1,28 +1,34 @@
-import { useState, useEffect } from 'react'
-import { Text } from 'react-native'
-import { Worklet } from 'react-native-bare-kit'
-import b4a from 'b4a'
+import { useContext } from 'react'
+import { View, StyleSheet } from 'react-native'
+import { SnapshotContext } from './_layout'
+import { Onboarding } from '../components/Onboarding'
+import { Waiting } from '../components/Waiting'
+import { MainView } from '../components/MainView'
+import { ErrorBanner } from '../components/ErrorBanner'
 
-export default function () {
-  const [response, setResponse] = useState(null)
-
-  useEffect(() => {
-    const worklet = new Worklet()
-
-    const source = `
-    const { IPC } = BareKit
-
-    IPC.on('data', (data) => console.log(data.toString()))
-    IPC.write(Buffer.from('Hello from Bare!'))
-    `
-
-    worklet.start('/app.js', source)
-
-    const { IPC } = worklet
-
-    IPC.on('data', (data) => setResponse(b4a.toString(data)))
-    IPC.write(b4a.from('Hello from React Native!'))
-  }, [])
-
-  return <Text>{response}</Text>
+// Routes on snapshot.groupStatus, mirroring desktop/ui/app.js's routedView().
+function routedView (snapshot, bridge) {
+  if (snapshot.groupStatus === 'joining') return <Waiting snapshot={snapshot} />
+  if (snapshot.groupStatus === 'member') return <MainView bridge={bridge} snapshot={snapshot} />
+  return <Onboarding bridge={bridge} />
 }
+
+export default function Index () {
+  const { snapshot, dispatch, bridge } = useContext(SnapshotContext)
+
+  return (
+    <View style={styles.root}>
+      {snapshot.lastError && (
+        <ErrorBanner
+          message={snapshot.lastError}
+          onDismiss={() => dispatch({ type: 'dismiss-error' })}
+        />
+      )}
+      {routedView(snapshot, bridge)}
+    </View>
+  )
+}
+
+const styles = StyleSheet.create({
+  root: { flex: 1 }
+})

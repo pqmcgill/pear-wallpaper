@@ -305,3 +305,49 @@
   specifiers in the bundle's JSON header — confirmed by grep, not embedded
   binaries. `android/app/gen/` stayed gitignored (`git status` shows no
   bundle).
+- 2026-08-23 Android-shell Task 4: RN shell wired to the real core —
+  `lib/store.js` (`reduce`/`initialSnapshot`, ported verbatim from the
+  brief, same joining/joinError fold as desktop `ui/app.js`);
+  `lib/worklet-client.js`'s `getBridge()` module-level singleton (single-
+  writer rule, enforcement point 1) sends the init frame the instant the
+  Worklet starts and disambiguates the terminal-error contract from
+  `worklet/host.js`: an `'error'` evt arriving before `'ready'` ever fired
+  means the init failed and the Bare process exited, so the singleton is
+  nulled for a fresh `getBridge()` next time; an `'error'` evt *after*
+  `'ready'` is an ordinary operational failure (engine/auto-resume-join)
+  forwarded by `bridge-main` and must NOT tear down a live worklet — this
+  distinction isn't in the brief's own worklet-client sketch and was
+  worth a dedicated jest case. `app/_layout.js` owns the `SnapshotContext`
+  provider, the `useReducer(reduce, initialSnapshot)`, and the two RN-only
+  lifecycle duties the desktop renderer never had: calling `getBridge()`
+  once on mount, and an `AppState` listener translating `active`/
+  `background` into `getWorklet()?.resume()` + `syncNow()` /
+  `getWorklet()?.suspend(30000)` (confirmed `suspend(linger)`/`resume()`
+  instance methods match `react-native-bare-kit@0.15.0`'s `.d.ts` exactly,
+  no divergence there). `app/index.js` replaces the Task 2 echo screen
+  with `groupStatus`-based routing (Onboarding/Waiting/MainView) plus an
+  `ErrorBanner` overlay, ported from `desktop/ui/app.js`/`components/*`
+  logic onto RN primitives. Two real divergences hit and recorded in
+  `docs/notes/api-divergences.md`: (1) `bare-pack`'s `.bundle.mjs` output
+  is a plain `export default "<bundle string>"`, consumed the same way
+  the Task 2 template consumed its inline source string — no metro change
+  needed (`.mjs` is already in Metro's default `sourceExts`), but
+  jest-expo's preset transform regex (`\.[jt]sx?$`) doesn't cover `.mjs`,
+  so both this bundle import and `pear-wallpaper-bridge/ui` (real ESM)
+  failed under jest until `jest.config.js` added
+  `transform: { '\\.mjs$': 'babel-jest' }` alongside the preset. (2)
+  `expo-file-system`'s `Paths.document` isn't a renamed string constant —
+  it's a `Directory` whose `.uri` is a `file://` URI (confirmed from the
+  Android native module source); `worklet-client.js` strips the scheme
+  for a plain fs path since the worklet's corestore wants one, same as
+  desktop's `app.getPath('userData')`. On-device milestone exceeded scope:
+  not only did Onboarding render clean on `emulator-5554` (fresh install,
+  clean `adb logcat`, no `[worklet] init failed`), but pressing "Create a
+  group" live drove the full pipeline through a real `createGroup()` on
+  the actual Autobase/Corestore stack and routed to `MainView` showing
+  "Devices in group: 1"; `adb shell run-as ... ls files/pear-wallpaper/corestore`
+  confirmed a real `CORESTORE`/rocksdb `db/` on disk at the expected path.
+  App data cleared afterward (`pm clear`) for a fresh Task 5 start.
+  `npm run test:ui`: 11/11 pristine; `npm run test:worklet`: 2/2 tests,
+  8/8 asserts, unchanged and still green. Full script + evidence in
+  `docs/notes/qa-android.md` Act 1.

@@ -548,3 +548,65 @@ and, incidentally, 9 more native deps pulled in transitively
 linked-modules mechanism per the `--host` targets given
 (`android-arm64`, `android-x64`), not embedded in the bundle — that's
 the point of `--linked` for a mobile target.
+
+## Task 4: bare-pack's `.bundle.mjs` output is a plain default-export string
+
+The template echo screen (`android/app/index.js` pre-Task-4) never
+imported a generated bundle — it inlined a literal source string and
+called `worklet.start('/app.js', source)` directly. `bare-pack`'s CLI
+`--out .../worklet.bundle.mjs` (`bundle:worklet` script) instead produces
+`export default "<len>\n{...json bundle...}"` (confirmed by reading the
+generated file directly, and by `bare-pack`'s README "bundle format"
+table: `bundle.mjs` → `.bundle.mjs` → "ES module wrapper for a
+`.bundle`"). So `lib/worklet-client.js` does
+`import bundle from '../app/gen/worklet.bundle.mjs'` and calls
+`worklet.start('/worklet.bundle', bundle)` — same `Worklet#start(path,
+source)` shape as the template, just with a generated string instead of
+a literal one. Metro's default `sourceExts` already includes `mjs`
+(confirmed via `getDefaultConfig(__dirname).resolver.sourceExts`), so no
+metro.config.js change was needed for the app build. Jest needed one,
+though: jest-expo's preset only wires `babel-jest` for `\.[jt]sx?$`
+(confirmed via `require('jest-expo/jest-preset').transform`), which does
+not match `.mjs` — both the bundle import and `pear-wallpaper-bridge/ui`
+(`bridge-ui.mjs`, real ESM `export function` syntax) hit `SyntaxError:
+Unexpected token 'export'` under jest without it. Fixed by adding
+`transform: { '\\.mjs$': 'babel-jest' }` to `android/jest.config.js`
+alongside the preset (jest merges preset + local `transform` maps, so
+this adds a matcher rather than replacing the preset's four).
+
+## Task 4: expo-file-system's `documentDirectory` string constant is gone; `Paths.document.uri` is a `file://` URI, not a plain path
+
+The brief's own note ("SDK 54+ renamed `documentDirectory` → `Paths.document`")
+undersold the change: it isn't a rename, the new `Paths.document` is a
+`Directory` instance whose `.uri` getter returns a `file://` URI string
+(confirmed from the installed package's Android native source,
+`expo-file-system/android/.../FileSystemModule.kt`: `Constant
+("documentDirectory") { Uri.fromFile(context.filesDir).toString() + "/" }`
+— e.g. `file:///data/user/0/com.pearwallpaper.app/files/`). The
+worklet's corestore (`core/index.js`: `new Corestore(storageDir +
+'/corestore')`, opened by Bare's own `fs`/`rocksdb-native`) wants a plain
+filesystem path, the same shape desktop passes via
+`app.getPath('userData')` — a `file://`-prefixed string is not a valid
+path there. `lib/worklet-client.js`'s `documentsPath()` strips the
+`file://` scheme and any trailing slash with a plain string replace
+(`Paths.document.uri.replace(/^file:\/\//, '').replace(/\/$/, '')`)
+rather than pulling in a URL polyfill for this one substitution.
+Old-style `expo-file-system` legacy functions (`getInfoAsync`, etc.) are
+still exported from the package root but throw at runtime per their own
+`@deprecated ... This method will throw in runtime` JSDoc — only the new
+`File`/`Directory`/`Paths` API is usable at all under SDK 55's installed
+`expo-file-system@55.0.19`.
+
+`expo-file-system` itself was not added to `android/package.json` (only
+`expo-device` was, per the brief) — it's already resolvable because
+`expo@55.0.23` itself depends on `expo-file-system@~55.0.19` internally
+(confirmed in `package-lock.json`), so npm hoists it into
+`node_modules/expo-file-system` even though it's not a direct dependency
+of this app. `lib/worklet-client.js` imports it directly (`import {
+Paths } from 'expo-file-system'`), which works today but is relying on
+another package's transitive dependency rather than a declared one —
+flagging this now since a later task (`docs/superpowers/plans/...` Task
+using "the same expo-file-system API family as Task 4") will import it
+again; if `expo` ever stops depending on it directly, both imports break
+silently until someone runs `npx expo install expo-file-system` and adds
+it for real.

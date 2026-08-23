@@ -2,6 +2,7 @@ import { useContext, useState } from 'react'
 import { View, Text, Image, Switch, Pressable, StyleSheet } from 'react-native'
 import { useRouter, useLocalSearchParams } from 'expo-router'
 import { SnapshotContext } from './_layout'
+import { deleteStagedFile } from '../lib/share-target'
 
 // Android port of desktop/ui/components/Send.js's target-selection logic
 // (same self-filtered roster, same "chosen = the keys currently checked"
@@ -25,6 +26,16 @@ export function SendScreen ({ bridge, snapshot, filePath, onSent }) {
     setSending(true)
     try {
       await bridge.call('sendWallpaper', { filePath, targets: chosen })
+      try {
+        // Best-effort: sendWallpaper already succeeded and core has its own
+        // copy of the image in hyperblobs by this point, so a failure to
+        // remove the now-redundant staged file must never surface as a send
+        // failure (stageSharedImage's own reap-on-next-share is the
+        // backstop if this does fail).
+        deleteStagedFile(filePath)
+      } catch (err) {
+        console.warn('pear-wallpaper: failed to delete staged file after send', err)
+      }
       onSent?.()
     } catch (err) {
       setSendError(err.message)

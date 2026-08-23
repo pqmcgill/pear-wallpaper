@@ -10,7 +10,7 @@ function pairTransport () {
 }
 
 test('call() resolves with the reply value and matches by id', async (t) => {
-  const { createBridgeUi } = await import('../ui/bridge-ui.js')
+  const { createBridgeUi } = await import('../bridge-ui.mjs')
   const [uiT, mainT] = pairTransport()
   mainT.onMessage((m) => { if (m.t === 'req') mainT.send({ t: 'res', id: m.id, ok: true, value: { echoed: m.cmd } }) })
   const bridge = createBridgeUi(uiT)
@@ -18,7 +18,7 @@ test('call() resolves with the reply value and matches by id', async (t) => {
 })
 
 test('call() rejects when the reply is ok:false', async (t) => {
-  const { createBridgeUi } = await import('../ui/bridge-ui.js')
+  const { createBridgeUi } = await import('../bridge-ui.mjs')
   const [uiT, mainT] = pairTransport()
   mainT.onMessage((m) => { if (m.t === 'req') mainT.send({ t: 'res', id: m.id, ok: false, error: 'nope' }) })
   const bridge = createBridgeUi(uiT)
@@ -26,7 +26,7 @@ test('call() rejects when the reply is ok:false', async (t) => {
 })
 
 test('on() delivers pushed events', async (t) => {
-  const { createBridgeUi } = await import('../ui/bridge-ui.js')
+  const { createBridgeUi } = await import('../bridge-ui.mjs')
   const [uiT, mainT] = pairTransport()
   const bridge = createBridgeUi(uiT)
   const got = new Promise((res) => bridge.on('candidate', res))

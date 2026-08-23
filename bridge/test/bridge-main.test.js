@@ -1,6 +1,6 @@
 const test = require('brittle')
 const EventEmitter = require('events')
-const { createBridgeMain } = require('../lib/bridge-main.js')
+const { createBridgeMain } = require('../bridge-main.js')
 
 function pairTransport () {
   const a = new EventEmitter(); const b = new EventEmitter()

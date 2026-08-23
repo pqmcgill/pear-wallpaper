@@ -17,7 +17,7 @@ pivot rationale).
 renderer (Chromium, Preact + htm UI)
   ⇄ contextBridge/ipcRenderer   (preload.js)
   ⇄ Electron main               (main.js)
-  ⇄ Bare IPC                    (newline-JSON frames, lib/transport/*)
+  ⇄ Bare IPC                    (newline-JSON frames, ../bridge/transport/, ui/electron-ipc.js)
   ⇄ Bare worker                 (worker/core-host.js)
 ```
 
@@ -39,14 +39,22 @@ renderer (Chromium, Preact + htm UI)
   transport. It holds only the latest snapshot pushed from the worker and
   re-renders as a pure function of it.
 
-The bridge (`lib/bridge-main.js` / `ui/bridge-ui.js`) is transport-agnostic
-(`{ send, onMessage }`), so neither it nor any UI component changed across
-the pivot — only thin adapters at each hop are new
-(`lib/transport/bare-ipc.js`, `ui/electron-ipc.js` — the latter lives in
-`ui/` as browser ESM because the file:// renderer has no bundler and cannot
-import CJS from `lib/`), plus
-`main.js`'s relay, which just forwards frames both directions without
-parsing them.
+The bridge, sync-engine, and duplex-JSON transport now live in
+**`../bridge`** (`pear-wallpaper-bridge`, a sibling package to `core` and
+`desktop`) — lifted out so the forthcoming Android shell can share the same
+protocol layer instead of forking it. Desktop consumes it entirely through
+its `exports` map: `require('pear-wallpaper-bridge/main')`,
+`.../engine`, `.../transport` from `worker/core-host.js` (Node/Bare's CJS
+`require`), and `import { createBridgeUi } from 'pear-wallpaper-bridge/ui'`
+from `ui/app.js` (browser ESM, via `ui/index.html`'s import map — `bridge-ui`
+is the one `.mjs` file in the package because the browser needs genuine ESM
+with no bundler, while its CJS siblings serve Node/Bare `require` and, later,
+Metro). The bridge is transport-agnostic (`{ send, onMessage }`), so neither
+it nor any UI component changed shape across the lift — only thin adapters
+at each hop are desktop-specific (`../bridge/transport/duplex-json.js` is
+shared; `ui/electron-ipc.js` — browser ESM, since the file:// renderer has no
+bundler and cannot import CJS — is desktop-only), plus `main.js`'s relay,
+which just forwards frames both directions without parsing them.
 
 ## Layout
 
@@ -56,17 +64,24 @@ parsing them.
 - `preload.js` — `contextBridge`: exposes `window.bridgeTransport`
   (`send`/`onMessage`) to the renderer.
 - `worker/core-host.js` — Bare worker entry: boots `WallpaperCore` +
-  sync-engine + `bridge-main` over `Bare.IPC`; handles the `{t:'shutdown'}`
-  control frame.
-- `lib/` — runtime-agnostic logic, reused unchanged from the pre-pivot
-  shell: `bridge-main.js`, `sync-engine.js`, `device-name.js`,
+  `pear-wallpaper-bridge`'s sync-engine + `bridge-main` over `Bare.IPC`;
+  handles the `{t:'shutdown'}` control frame.
+- `../bridge/` (`pear-wallpaper-bridge`) — the shared, shell-agnostic
+  protocol layer: `bridge-main.js` (command dispatch + event forwarding),
+  `bridge-ui.mjs`, `sync-engine.js`, and `transport/duplex-json.js`
+  (newline-JSON framing, b4a-based so the same file runs under Bare, Node,
+  and RN). Desktop depends on it as `file:../bridge`; see its own README/
+  package.json for the full interface.
+- `lib/` — desktop-only, runtime-agnostic logic: `device-name.js`,
   `login-item.js` (LaunchAgent plist write/bootstrap/bootout),
   `platform/` (`darwin.js`'s `osascript` wallpaper setter, selected via
   `platform/index.js`), plus `compat/` (Bare shims for `process` and
-  `child_process`, needed because Bare has no Node builtins) and
-  `transport/` (the worker-side `bare-ipc.js` adapter; the renderer-side
-  adapter is `ui/electron-ipc.js`, see above). `single-instance.js` is kept
-  in-tree but retired from the boot path (Electron's own lock replaces it).
+  `child_process`, needed because Bare has no Node builtins). The Bare-side
+  transport adapter moved to `../bridge/transport/duplex-json.js` (see
+  above); the renderer-side adapter stays here as `ui/electron-ipc.js` (see
+  below — it's desktop/Electron-specific, not shared).
+  `single-instance.js` is kept in-tree but retired from the boot path
+  (Electron's own lock replaces it).
 - `ui/` — the Preact renderer (Onboarding/Waiting/MainView with
   Devices/Send/Received/Settings tabs), reused unchanged. `ui/index.html`
   loads `ui/app.js`, and carries an inline import map (CSP-hashed — see the
@@ -150,13 +165,16 @@ OTA path as the least battle-tested part of this app (flagged further in
   brittle unit/component tests with injectable dependencies (fake `fs`,
   fake `exec`, fake `bridge`/`core`/transport endpoints): single-instance
   locking, the wallpaper setter's argv-safety, the LaunchAgent plist
-  writer, the device-name resolver, the sync engine's apply/coalesce/
-  error-surfacing logic, both new transport adapters
-  (`lib/transport/bare-ipc.js`/`ui/electron-ipc.js`), the bridge's
-  command/event wire protocol on both ends, the renderer module graph's
+  writer, the device-name resolver, the renderer-side transport adapter
+  (`ui/electron-ipc.js`), the renderer module graph's
   import-map/CSP-hash/ESM invariants (`test/renderer-modules.test.js`), and
   every Preact component's rendering + bridge-call wiring. Current:
-  **53/53 tests, 120/120 asserts, pristine** — no stray warnings, no skips.
+  **35/35 tests, 85/85 asserts, pristine** — no stray warnings, no skips.
+  The bridge's command/event wire protocol, the sync engine's
+  apply/coalesce/error-surfacing logic, and the worker-side duplex-JSON
+  transport now have their own suite in `../bridge` (`cd ../bridge && npm
+  test` — **20/20 tests, 47/47 asserts**), run separately since that logic
+  no longer lives in this package.
 - **Manual (GUI/OS effects `npm test` cannot reach)** — real window
   rendering, the renderer↔main↔worker IPC round-trip actually crossing
   process boundaries, macOS's one-time Automation permission prompt for

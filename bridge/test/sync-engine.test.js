@@ -1,6 +1,6 @@
 const test = require('brittle')
 const EventEmitter = require('events')
-const { createSyncEngine } = require('../lib/sync-engine.js')
+const { createSyncEngine } = require('../sync-engine.js')
 
 function fakeCore (pending) {
   const ee = new EventEmitter()

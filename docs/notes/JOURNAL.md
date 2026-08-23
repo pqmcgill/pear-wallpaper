@@ -230,3 +230,23 @@
   resolve on disk, that the CSP hash tracks the current map text, and that
   the transport module stays ESM. Suite: 53/53 tests, 120/120 asserts
   (was 48/87).
+- 2026-08-23 Android-shell Task 1: lifted bridge-main/sync-engine/
+  transport into a new sibling package `bridge/` (`pear-wallpaper-bridge`)
+  so Android can share the protocol layer instead of forking it; transport
+  renamed `duplex-json.js`/`createDuplexJsonTransport` and rewritten on
+  b4a instead of `Buffer` (Buffer isn't a global in RN); `bridge-ui` is the
+  package's one `.mjs` export (genuine browser ESM for the no-bundler
+  renderer) while its three siblings stay CJS for Node/Bare `require` and,
+  later, Metro; `pendingWallpaper`/`markApplied` added as unconditional
+  bridge commands (Android's RN apply path polls/acks over the bridge
+  directly, spec §3.2) and `reapply`/`setLoginAtLogin`/`syncNow` made
+  conditional on `platform`/`loginItem`/`engine` being passed in. Caught
+  empirically via the real Electron boot check (not by the unit suites):
+  `bridge/package.json` needed its own `"imports"` remap of `'events'` to
+  `bare-events` under Bare — the old desktop/lib/sync-engine.js's bare
+  `require('events')` only ever worked because an unrelated devDependency
+  (webpack, via electron-forge) happened to leave an `events` polyfill
+  sitting in desktop's node_modules; `bridge/`'s own node_modules has no
+  such fluke, and Bare has no built-in 'events'. Desktop: 35/35 tests,
+  85/85 asserts (down from 53/53 — the four moved suites now run in
+  `bridge/`: 20/20 tests, 47/47 asserts there).

@@ -1,0 +1,17 @@
+{
+  "name": "pear-wallpaper-bridge",
+  "version": "0.1.0",
+  "type": "commonjs",
+  "exports": {
+    "./main": "./bridge-main.js",
+    "./ui": "./bridge-ui.mjs",
+    "./engine": "./sync-engine.js",
+    "./transport": "./transport/duplex-json.js"
+  },
+  "scripts": { "test": "brittle test/*.test.js" },
+  "imports": {
+    "events": { "bare": "bare-events", "default": "events" }
+  },
+  "dependencies": { "b4a": "1.8.1", "bare-events": "2.9.1" },
+  "devDependencies": { "brittle": "3.19.1", "test-tmp": "1.4.0" }
+}

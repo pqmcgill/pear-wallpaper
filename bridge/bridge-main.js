@@ -1,16 +1,26 @@
-function createBridgeMain ({ core, platform, loginItem, engine, transport }) {
+function createBridgeMain ({ core, transport, engine = null, platform = null, loginItem = null }) {
   async function snapshot () {
     const inGroup = core.groupStatus === 'member'
-    return {
+    const snap = {
       deviceKey: core.deviceKey,
       deviceName: core.deviceName,
       groupStatus: core.groupStatus,
       roster: inGroup ? await core.listDevices() : [],
       sends: inGroup ? await core.listSends() : [],
       received: inGroup ? await core.listReceived() : [],
-      loginAtLogin: await loginItem.isEnabled(),
-      lastSync: engine.lastSync
+      lastSync: engine ? engine.lastSync : null
     }
+    // Key omitted (not null) when the shell has no login-item concept
+    // (Android): the UI treats "absent" as "don't render the toggle".
+    if (loginItem) snap.loginAtLogin = await loginItem.isEnabled()
+    return snap
+  }
+
+  async function reapply (wallpaperId) {
+    const list = await core.listReceived({ limit: 50 })
+    const item = list.find((r) => r.id === wallpaperId)
+    if (!item) throw new Error('unknown received wallpaper')
+    await platform.setWallpaper(item.filePath)
   }
 
   const commands = {
@@ -22,14 +32,14 @@ function createBridgeMain ({ core, platform, loginItem, engine, transport }) {
     deny: (key) => core.deny(key),
     removeDevice: (key) => core.removeDevice(key),
     sendWallpaper: ({ filePath, targets }) => core.sendWallpaper(filePath, targets),
-    reapply: async (wallpaperId) => {
-      const list = await core.listReceived({ limit: 50 })
-      const item = list.find((r) => r.id === wallpaperId)
-      if (!item) throw new Error('unknown received wallpaper')
-      await platform.setWallpaper(item.filePath)
-    },
-    syncNow: () => engine.syncNow(),
-    setLoginAtLogin: (on) => (on ? loginItem.enable() : loginItem.disable())
+    // Shared across every shell: Android's RN apply path polls
+    // pendingWallpaper and acks with markApplied directly over the bridge
+    // (spec §3.2 — there is no sync-engine on that side of the wire).
+    pendingWallpaper: () => core.pendingWallpaper(),
+    markApplied: (wallpaperId) => core.markApplied(wallpaperId),
+    ...(engine ? { syncNow: () => engine.syncNow() } : {}),
+    ...(platform ? { reapply } : {}),
+    ...(loginItem ? { setLoginAtLogin: (on) => (on ? loginItem.enable() : loginItem.disable()) } : {})
     // NOTE (final-review fix wave): a `quit` command used to live here
     // (`() => Pear.exit(0)`), left over from the pre-Electron-conversion
     // pear-runtime UI process shape. `Pear` is not a global in this Bare
@@ -63,8 +73,10 @@ function createBridgeMain ({ core, platform, loginItem, engine, transport }) {
       core.on('wallpaper', safePushState)
       core.on('pairing-request', (p) => pushEvent('candidate', p))
       core.on('error-joining', () => pushEvent('error', { message: 'auto-resume join failed; ask the creator for a fresh invite' }))
-      engine.on && engine.on('error', (err) => pushEvent('error', { message: err.message }))
-      if (engine.on) engine.on('applied', safePushState)
+      if (engine && engine.on) {
+        engine.on('error', (err) => pushEvent('error', { message: err.message }))
+        engine.on('applied', safePushState)
+      }
     }
   }
 }

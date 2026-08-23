@@ -25,10 +25,10 @@ require('../lib/compat/process.js')
 const WallpaperCore = require('pear-wallpaper-core')
 const { selectPlatform } = require('../lib/platform/index.js')
 const { createLoginItem } = require('../lib/login-item.js')
-const { createSyncEngine } = require('../lib/sync-engine.js')
-const { createBridgeMain } = require('../lib/bridge-main.js')
+const { createSyncEngine } = require('pear-wallpaper-bridge/engine')
+const { createBridgeMain } = require('pear-wallpaper-bridge/main')
 const { resolveDeviceName } = require('../lib/device-name.js')
-const { createBareTransport } = require('../lib/transport/bare-ipc.js')
+const { createDuplexJsonTransport } = require('pear-wallpaper-bridge/transport')
 
 // Config travels via argv, NOT `opts` — bare-sidecar's Sidecar constructor
 // never reads `opts` (currently reserved/no-op; see task-2-report.md). main.js
@@ -60,7 +60,7 @@ async function main () {
     programArguments: [exePath]
   })
 
-  const transport = createBareTransport(endpoint)
+  const transport = createDuplexJsonTransport(endpoint)
 
   // Graceful shutdown. main.js sends a `{ t: 'shutdown' }` control frame
   // over this same transport on `app.before-quit` (see main.js). This is a

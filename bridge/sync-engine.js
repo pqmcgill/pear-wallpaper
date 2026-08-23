@@ -1,6 +1,11 @@
+// 'events' has no Bare builtin (unlike Node) — package.json's "imports"
+// field remaps it to bare-events under the "bare" condition (same pattern
+// hyperswarm/hyperdht use for themselves), so this same require resolves
+// correctly whether this module runs under Node (desktop test suite,
+// future RN Metro) or Bare (desktop worker, Android worklet).
 const EventEmitter = require('events')
 
-function createSyncEngine ({ core, platform, intervalMs = 180000 }) {
+function createSyncEngine ({ core, platform = null, intervalMs = 180000 }) {
   const ee = new EventEmitter()
   let timer = null
   let wallpaperHandler = null
@@ -10,6 +15,10 @@ function createSyncEngine ({ core, platform, intervalMs = 180000 }) {
     lastSync: null,
     on: ee.on.bind(ee),
     async applyPending () {
+      // Android: apply is RN-side (spec §3.2); the sync loop still runs
+      // (syncNow still calls core.sync() and stamps lastSync) but there is
+      // no platform.setWallpaper to call here.
+      if (!platform) return
       // Coalesce concurrent triggers: never run two apply passes at once.
       if (applying) { queued = true; return }
       applying = true

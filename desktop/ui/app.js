@@ -1,6 +1,6 @@
 import { h, render } from 'preact'
 import htm from 'htm'
-import { createBridgeUi } from './bridge-ui.js'
+import { createBridgeUi } from 'pear-wallpaper-bridge/ui'
 import { createElectronTransport } from './electron-ipc.js'
 import { ErrorBanner } from './components/ErrorBanner.js'
 import { Onboarding } from './components/Onboarding.js'

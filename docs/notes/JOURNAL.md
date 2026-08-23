@@ -557,3 +557,35 @@
   Concerns, `qa-android.md` Act 6, and this line — not overstated as
   device-proven. `npm run test:ui`: 59/59 pristine. `npm run test:worklet`:
   unchanged, 2/2 tests, 8/8 asserts. JS-only fix, no rebuild.
+- 2026-08-23 Android-shell Task 10: QA hardening, docs, release-build pass
+  (emulator, no physical device this session — controller ruling). Act 7
+  (lifecycle): a send landing mid-suspend (~18s into a background window)
+  was drained and applied purely by the `AppState` `'active'` →
+  `resume()` + `syncNow()` path; a second pass backgrounded past the 30s
+  linger (35s) produced no crash, no uncaught `Worklet has been
+  terminated`, and a fresh send afterward still round-tripped normally —
+  **no evidence the 30s linger needs tuning**. Act 8 (revoke): confirmed
+  `core.groupStatus` never depends on roster membership, so a revoked
+  device's `groupStatus` stays `'member'` forever; live-tested
+  `removeDevice` against a paired emulator — **finding, reported not
+  fixed**: the revoked device's UI shows no distinct "you were removed"
+  state at all, just an ordinary-looking stale/offline roster (same
+  underlying gap already implicit in desktop's Act 12) — doesn't spin,
+  but doesn't state anything either. Act 9 (release build, emulator per
+  ruling): `npx expo run:android --variant release` — `BUILD SUCCESSFUL`,
+  booted with no dev-build toast (confirmed genuinely release JS), paired
+  with a scripted peer, sent+applied a wallpaper, zero app-related
+  crashes in logcat. Noted honestly: `enableMinifyInReleaseBuilds` is off
+  by default in this checkout, so R8 shrinking isn't exercised, though the
+  embedded-bundle/Hermes-AOT path (the more likely real risk surface) is.
+  Restored the emulator to a working debug install (`adb install` alone
+  isn't enough — needs `npm run android` for Metro) for future sessions.
+  Wrote `android/README.md` (architecture, dev-loop bundle trap, logcat
+  recipe, test-split rationale, scripts table, pinned-versions policy) and
+  a pending-human checklist appended to `qa-android.md` (APK sideload,
+  Android-as-admitting-member, killed-app `'synced'`-branch, LTE/real-NAT,
+  spec §7 three-device e2e) — explicitly marked PENDING, not claimed.
+  `cd bridge && npm test`: 20/20. `cd desktop && npm test`: 35/35.
+  `cd android && npm run test:worklet`: 2/2 (8/8 asserts). `npm run
+  test:ui`: 59/59. All four suites pristine, no code changes this task
+  (QA + docs only).

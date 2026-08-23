@@ -962,3 +962,430 @@ outside the repo (`git status` clean before commit — confirmed, only
 Task 9's real source/test files and docs are tracked changes). `npm run
 test:ui`: 57/57 (54 carried + 3 new `background-sync.test.js` cases).
 `npm run test:worklet`: unchanged, 2/2 tests, 8/8 asserts.
+
+## Act 7 — Lifecycle: a send landing mid-suspend, and the linger boundary (2026-08-23)
+
+Task 10. Targets `app/_layout.js`'s `AppState.addEventListener('change', ...)`
+handler (Task 4): `'background'` calls `getWorklet()?.suspend(30000)`;
+`'active'` calls `getWorklet()?.resume()` then `bridge.call('syncNow')`.
+This Act asks two things: (1) does a send that arrives while the app is
+backgrounded actually survive to be applied once the app is foregrounded
+again, and (2) does the 30000ms linger need tuning — is it long enough,
+and is there a cliff at/after the boundary (e.g. `resume()` on an
+already-terminated `Worklet` throwing uncaught, per
+`react-native-bare-kit`'s `index.js`: `resume()`/`suspend()` both
+`throw new Error('Worklet has been terminated')` if the native side has
+already invoked the JS-bound `terminate` callback for that instance).
+
+Setup: scripted desktop peer (`desktop/qa10-peer-act7.js`, deleted after —
+same shape as prior Acts' peers, `pear-wallpaper-core` required from
+`desktop/node_modules`'s symlink) created a group and printed an invite;
+joined from a freshly-cleared emulator via paste-invite. The peer waits on
+a trigger file before calling `sendWallpaper`, so the send can be timed
+precisely against the phone's AppState.
+
+### (a) Send lands mid-suspend, foregrounded well inside the 30s window
+
+1. `adb shell input keyevent KEYCODE_HOME` — app backgrounds,
+   `suspend(30000)` fires.
+2. ~3s later, touched the peer's trigger file. Peer's `listSends()` polling
+   showed the target immediately, and stayed, at `status: "pending"` —
+   confirms the send genuinely lands while the phone is suspended, not
+   applied live (the JS event loop isn't running to process it). Notably
+   the peer's roster still reported the phone `online: true` throughout —
+   the underlying swarm TCP connection is not torn down by `suspend()`,
+   only the Bare JS thread is paused; bytes queue at the OS/socket level
+   for whenever the isolate resumes.
+3. ~15s further (about 18s of total background time, well inside the 30s
+   linger), `adb shell am start -n com.pearwallpaper.app/.MainActivity`
+   brought the app to the foreground. `AppState` fired `'active'`:
+   `getWorklet().resume()` succeeded (no throw), `bridge.call('syncNow')`
+   ran `core.sync()` against the still-open connection.
+4. Peer's log went `pending` → `delivered` within the next poll tick;
+   `adb shell dumpsys wallpaper`'s record id advanced (`id=5` → `id=10`,
+   `mWhich=1` — home screen). MainView screenshot
+   (`act7-3-after-resume.png`) confirmed the app came back on the roster
+   screen with no `ErrorBanner`. One `ReactNativeJS` warning appeared in
+   logcat at the same timestamp (`Cannot connect to Expo CLI` /
+   `Error: undefined`) — this is the stock RN dev-build banner for "no
+   Metro dev-server reachable" (none was running this session; the app's
+   JS still ran from whatever was already loaded), unrelated to the
+   worklet/lifecycle code path — confirmed by checking the message text
+   against React Native's own dev-menu source, not assumed.
+
+**This is the milestone**: a real send, queued on the wire while the
+device was suspended (not killed — see Act 6/Task 9 for that harsher
+case), was drained and applied purely by the resume-triggered `syncNow()`
+path, with no background-task machinery involved at all.
+
+### (b) Past the 30s linger boundary — does anything break?
+
+Backgrounded again, this time left alone for **35s** (past the linger) before
+foregrounding. `adb logcat -c` beforehand, `-d` after, filtered for
+`ReactNativeJS|worklet|fatal|exception|error`: **no matching lines at
+all** — no crash, no uncaught `Worklet has been terminated` throw, no
+`[worklet] init failed`. The app came back on `MainView` normally
+(`act7-4-past-linger-resume.png`). To confirm the resident worklet was
+still genuinely functional (not just that the RN shell survived while the
+bridge underneath was silently dead), sent a second, distinct wallpaper
+(purple) from a **freshly-spawned** peer process pointed at the same
+`storageDir` (the original peer had been killed) while the app sat in the
+foreground: it round-tripped normally — `listSends()` went
+`pending` → `delivered` within ~20s (that latency is the new peer
+process's own DHT/swarm rediscovery, not anything worklet-side) — and the
+purple wallpaper was visible on the real home screen after backgrounding
+again to look (`act7-6-home-purple-check.png`).
+
+**Assessment: the 30s linger does not need tuning, on this evidence.**
+Both a send that arrives well inside the window (18s in) and a
+resume attempted past the window (35s of total background time) worked
+identically from the app's perspective — no truncated sync, no crash, no
+dropped connection requiring a fresh pairing. Two explanations are
+consistent with this: either (a) this build/version of
+`react-native-bare-kit` on Android does not actually auto-terminate the
+underlying worklet purely on a wall-clock linger expiry while the hosting
+process itself stays alive and un-throttled by the OS (the "linger" may
+be better understood as advisory input to the *native* suspend
+mechanism rather than a hard JS-visible timeout — nothing in the
+installed package's JS source or README documents which), or (b) it does
+terminate, but `getWorklet()?.resume()`'s optional-chaining plus
+`bridge.call()`'s own queuing happened to paper over it without visible
+symptoms in this exact scenario. Either way, **no evidence of breakage
+was found empirically** at 18s or 35s of background time on the emulator.
+**Not tested**: real OS memory pressure reclaiming the process entirely
+while backgrounded (a harsher case than either suspend scenario here) —
+that is Task 9/Act 6's killed-app scenario, already documented separately
+as freezing before RN JS boots, independent of this linger question.
+A physical device under real memory pressure (many other apps open,
+low-RAM device) could still behave differently than this idle emulator;
+noted on the pending-human checklist below.
+
+### Cleanup
+
+`adb shell pm clear` was deferred to the start of Act 8 (same group/pairing
+reused to avoid re-pairing from scratch); scripted peer processes killed;
+`desktop/qa10-peer-act7.js` and the ad hoc second-send script deleted
+before commit.
+
+## Act 8 — Revoke: the creator removes the device (2026-08-23)
+
+Task 10. `core.removeDevice(key)` ([`core/index.js`](../../core/index.js))
+appends a `remove-device` op (creator-only, checked against the group's
+`creator` record) and, in the same call, destroys any currently-open
+connection to that device (`const conn = this._connections.get(swarmKey);
+if (conn) conn.destroy()`). The applied op deletes the device's roster
+record (`view.del(k.device(key))`) and calls `base.removeWriter(...)`.
+Critically: **`core.groupStatus` is derived purely from `this.base !==
+null`** — it has no dependency on whether the device's own key is still
+present in the roster — so there is no code path anywhere that flips a
+removed device's `groupStatus` away from `'member'`.
+
+Setup: reused Act 7's paired group (Android already joined, both
+processes still holding the same `storageDir`s). A fresh Node process
+(`desktop/qa10-act8-revoke.js`, deleted after) re-opened the creator's
+`storageDir` (not `createGroup()` again — the same persisted group/local
+writer identity) and called `removeDevice(androidKey)`. By this point the
+old peer-to-phone connection from Act 7 had already closed (the peer
+process that made it had exited), so `removeDevice`'s own `conn.destroy()`
+was a no-op — the append itself is what mattered. `listDevices()`
+immediately after showed only the creator: the removal is durable and
+local-first, with no dependency on the removed device ever being told.
+
+### What Android's UI shows after being revoked
+
+Foregrounded the (already-paired, revoked) app twice — once via a plain
+`am start` and once via a full `HOME` → wait → `am start` cycle (the
+latter to force the `AppState` `'active'` → `resume()` + `syncNow()`
+path, i.e. a genuine reconnection attempt against the swarm key the app
+already knows, which is now gated out by `_isRostered` returning false
+with no pairing invite outstanding). Both times:
+
+- **No crash, no hang, no infinite spinner.** `adb logcat -d` filtered for
+  `ReactNativeJS|worklet|error` showed nothing at all — not even the
+  ordinary sync round produces log output on this build, so "silence" is
+  the expected steady state, not evidence either way about the
+  reconnection attempt's outcome.
+- **The Devices tab still lists the creator as a legitimate fellow
+  member** (`qa-desktop-act7 · creator`), with a gray/offline dot — visually
+  indistinguishable from an ordinary "creator is temporarily unreachable"
+  state (`act8-2-after-sync-attempt.png`). This is expected given the
+  code: Android's own cached view was never updated (the `remove-device`
+  op never reached it — see below), so its `listDevices()` still reflects
+  the pre-revocation roster.
+- **No `ErrorBanner`, no distinct copy anywhere.** `core/index.js`'s
+  `_onConnection` only `emit('roster-changed')` inside the `allowed`
+  branch of the gate check — a rejected connection is destroyed via the
+  `!allowed` early return with **no event emitted at all**, so nothing
+  ever reaches `bridge-main`'s `pushEvent('error', ...)` /
+  `dispatch({ type: 'error', ... })` / `ErrorBanner` chain.
+  `lib/store.js`'s `reduce`'s `'error'` case is simply never invoked for
+  this scenario. Confirmed independently from the creator's side too: the
+  revoke script's `core.on('roster-changed', ...)` listener never fired
+  during either of Android's two reconnection windows — a rejected
+  connection attempt (if the DHT even routed one through in that window)
+  leaves no trace on either end.
+
+**Finding, reported rather than fixed** (per this task's controller
+ruling): **the UI does not surface revocation as a distinct state.** A
+revoked device experiences exactly the same thing a device would
+experience if the creator were merely offline — same gray dot, same
+absence of any banner or message, same permanently-`'member'`
+`groupStatus`, forever. There is no code path, on Android or on desktop
+(the underlying behavior is identical — see `docs/notes/qa-desktop.md`
+Act 12, which documents the same "online dot goes stale" symptom without
+a distinct revoked-state message either), that ever tells a revoked
+device "you have been removed from this group." The task's acceptance
+bar asked whether the UI "states it rather than spinning" — the honest
+answer is **neither**: it doesn't spin (no hang, no infinite loading
+state), but it also doesn't state anything — it just looks like ordinary,
+recoverable offline. Whether this is acceptable (revocation as a
+low-signal, eventually-consistent lockout is arguably fine for this
+app's threat model — the point of revocation is capability removal, not
+notifying the ex-member) or a UX gap worth a follow-up task is a product
+call, left for that ruling rather than fixed silently here.
+
+### Cleanup
+
+`adb shell pm clear com.pearwallpaper.app`; both scripted Node processes
+killed; `desktop/qa10-peer-act7.js`, `desktop/qa10-act7-send2.js`, and
+`desktop/qa10-act8-revoke.js` deleted before commit (`git status`
+confirmed clean — only this task's real doc/README changes tracked).
+
+## Act 9 — Release build, on the emulator (2026-08-23)
+
+**Controller ruling for this session**: no physical Android device was
+available (Patrick away). The brief's original Act 9 (sideload to real
+hardware over LTE) is deferred to the pending-human checklist below.
+Instead, this Act runs the release **variant** on the same emulator used
+for every prior Act, as a meaningful stand-in: release bundles are
+AOT/Hermes-compiled and load their JS from an embedded asset rather than
+Metro, which is the actual mechanism most likely to break something that
+only worked by accident under debug (Bare/hypercore code executing under
+a different JS engine configuration is the classic failure mode named in
+the ruling).
+
+```bash
+cd android
+npm run bundle:worklet
+npx expo run:android --variant release
+```
+
+Build: `BUILD SUCCESSFUL in 3m 7s` (544 tasks: 404 executed, 98 from
+cache, 42 up-to-date) — no errors, no warnings beyond a routine Gradle-10
+deprecation notice unrelated to this app's own code. Output APK:
+`android/android/app/build/outputs/apk/release/app-release.apk`. Signing
+uses the generated debug keystore (`android/app/build.gradle`'s `release`
+signingConfig points at `signingConfigs.debug` — see `android/README.md`
+for why this matters for sideloading vs. real distribution).
+`enableMinifyInReleaseBuilds` is unset (defaults `false`) in this
+checkout, so this pass does **not** exercise R8/ProGuard code shrinking —
+noted honestly rather than claimed; it does exercise the embedded-bundle
++ Hermes-bytecode path, which is the release-vs-debug divergence that
+actually touches how the worklet's bundled JS gets loaded and run.
+
+`expo run:android`'s own post-build step logged `Waiting on
+http://localhost:8081` and `Opening pearwallpaper://expo-development-client/?url=...`
+— initially concerning (a real release build should need no Metro
+connection at all) — but this is the Expo CLI's own generic
+post-install housekeeping, not something the installed APK depends on:
+this project has no `expo-dev-client` dependency (`grep
+expo-dev-client android/package.json` — empty), so that deep link has
+nothing registered to handle it app-side, and the CLI process exited
+cleanly on its own (confirmed no lingering `expo`/Metro process
+afterward) rather than blocking on it.
+
+**Boot**: `adb shell dumpsys activity activities` showed
+`com.pearwallpaper.app/.MainActivity` as `topResumedActivity`;
+screenshot (`act9-1-post-install-state.png`) showed a clean Onboarding
+screen — critically, **no "Open debugger to view warnings" dev-build
+toast** (present on every debug-build screenshot throughout this task,
+e.g. `act7-2-after-join.png`) — direct visual confirmation this is
+genuinely the release JS configuration, not a debug build that happened
+to boot.
+
+**Pair**: scripted desktop peer (`desktop/qa10-peer-act9.js`, deleted
+after — same shape as Acts 7/8's), invite pasted in via the same
+`uiautomator dump`-derived exact tap coordinates as every prior Act.
+Peer log: `pairing-request` → `approve()` → roster showing both devices,
+phone `online: true`. Screenshot `act9-2-after-join.png`: MainView,
+`qa-desktop-act9 · creator` with a green dot, again no dev-build toast.
+
+**Send + apply**: peer sent a distinct 320×320 green PNG. `listSends()`
+went `pending` → `delivered`; `adb shell dumpsys wallpaper`'s record id
+advanced (`id=12` → `id=13`, `mWhich=1`, home screen). Backgrounded the
+app to see the real home screen: solid green
+(`act9-3-home-green-applied.png`). `adb logcat -d` filtered for
+`fatal|crash|exception` (excluding the known-benign
+`ReactNoCrashSoftException`, same exclusion Act 1 used) showed **zero**
+app-related hits — every match was unrelated OS/Google-service noise
+(`ChimeraSrvcProxy`, `OneSearchSuggestProvider`, a `WindowManager`
+`DeadObjectException` tied to the *launcher* window during the
+backgrounding transition, not this app).
+
+**Verdict: PASS.** The release build boots, pairs, syncs against a
+scripted peer, and applies a wallpaper, with no release-only breakage
+observed on this emulator. This does not by itself prove the harder
+physical-hardware/real-NAT/minified-R8 scenarios below — those remain
+genuinely pending, not claimed.
+
+### Restoring the debug install
+
+Per this task's contract, restored the emulator to a debug install for
+whoever runs the next session:
+
+```bash
+adb install -r android/android/app/build/outputs/apk/debug/app-debug.apk
+adb shell pm clear com.pearwallpaper.app
+```
+
+A bare reinstall like this is not sufficient on its own to get a working
+debug session, and that surfaced live: launching immediately after (no
+Metro attached) hit RN's stock red "Unable to load script... Make sure
+you're running Metro" screen (`act9-4-debug-restored.png`) — expected and
+correct debug-build behavior (debug builds fetch JS from Metro rather
+than embedding it), not a regression. Followed with the real dev-loop
+entry point, `npm run android` (which reruns `bundle:worklet`, starts
+Metro, and reinstalls/relaunches), to leave the emulator in a genuinely
+working debug state rather than a merely-installed one. Confirmed
+Onboarding rendered cleanly afterward with the dev-build toast visible
+again (a plain debug boot, matching every earlier Act).
+
+### Cleanup
+
+`adb shell pm clear com.pearwallpaper.app`; peer process killed;
+`desktop/qa10-peer-act9.js` deleted before commit.
+
+## Pending — physical-device checklist (requires Patrick)
+
+No physical Android device was available this session (Patrick away).
+Everything below is genuinely untested on real hardware — **do not treat
+any of it as passing** until it's actually run. Each item names the exact
+commands and the result that would count as a pass.
+
+### 0. Sideload the release APK to a physical phone
+
+```bash
+# Build (from android/, same as Act 9 above):
+npm run bundle:worklet
+npx expo run:android --variant release   # or reuse the APK Act 9 already built
+
+# With the phone connected over USB (USB debugging enabled) and selected
+# in `adb devices`:
+adb -s <device-serial> install -r android/android/app/build/outputs/apk/release/app-release.apk
+adb -s <device-serial> shell am start -n com.pearwallpaper.app/.MainActivity
+```
+**Expected**: installs without a signature conflict (debug-keystore
+signing, same as every prior debug install on that device — if a debug
+build was ever sideloaded from a *different* machine/keystore, uninstall
+first). App boots to Onboarding with no crash and no dev-build toast
+(confirms it's actually running the release JS, not a leftover debug
+install).
+
+### 1. Android as the admitting member (creator/approver role)
+
+Already flagged as unreliable in prior tasks' QA
+(`docs/notes/qa-android.md` Acts 1–6 always used Android as the
+*joiner*, never the creator/approver, over the emulator's NAT). Re-run
+with the physical phone as the group creator and a desktop (or a second
+phone) as the joiner:
+
+1. On the phone: "Create a group" → "New invite".
+2. On the other device: paste/scan the invite, "Join a group".
+3. On the phone: approve the resulting candidate.
+
+**Expected**: the same roster-sync happens as every joiner-side Act in
+this doc, just with the roles reversed — the phone's `pairing-request`
+event fires, `approve()` succeeds, both sides show a 2-device roster with
+the other party `online: true`. **Known risk**: the emulator's NAT made
+this role flaky in earlier sessions (undocumented root cause — plausibly
+DHT/hole-punching behaving differently when the phone is the one
+`swarm.join()`-ing first as a fresh group vs. joining an existing one);
+a physical device on a real network may or may not reproduce that.
+Record whichever happens.
+
+### 2. Killed-app background sync — the fresh-Worklet ('synced') branch
+
+Task 9 / Act 6 documented that **every** on-device scenario which
+actually completed a background round took the `nudged-resident` branch
+(resident worklet still in-process); the one scenario built to exercise
+`runBoundedSyncRound()`'s fresh-`Worklet` branch (the `'synced'` return
+value — the actual new machinery Task 9 added) froze before RN JS
+finished booting, on the emulator's debug build. This remains the single
+biggest gap in this shell's background-sync evidence.
+
+```bash
+# Pair the phone into a group with a scripted/real peer first, then:
+adb shell am kill com.pearwallpaper.app   # NOT force-stop — force-stop cancels the job outright
+# from the peer, send a wallpaper while the phone is "killed" (roster
+# should show it offline)
+adb shell dumpsys jobscheduler | grep -A3 pear-wallpaper-sync   # find <jobId>
+adb shell cmd jobscheduler run -f com.pearwallpaper.app <jobId>
+adb logcat -d | grep -E "BackgroundTaskConsumer|background-sync"
+```
+**Expected** (per the spec's own framing — opportunistic, not
+guaranteed): `logcat` shows `Executing task 'pear-wallpaper-sync'`
+followed by `[background-sync] synced` (not `nudged-resident` — no
+resident worklet exists after a kill) and `dumpsys wallpaper`'s record id
+advances *without* the app ever being foregrounded. Ideally re-run this
+against the **release** build too (an embedded JS bundle skips the
+Metro-fetch step that Task 9's report flagged as the plausible reason the
+debug build froze before JS booted) — release may behave meaningfully
+better here. **If it still freezes/fails on a real device**: that's a
+genuine, reportable limitation of this approach on Android, not a bug to
+chase further — the guaranteed sync-on-open path (already proven,
+multiple Acts) is the actual safety net either way.
+
+### 3. LTE / real NAT traversal (no shared LAN, no emulator's host-NAT)
+
+```bash
+# Phone on cellular data (Wi-Fi off), peer (desktop or another phone) on
+# a different network entirely (e.g. home Wi-Fi, not tethered to the phone):
+# pair via QR or a manually-copied invite string (no shared LAN for
+# easy invite transfer — send the invite text out-of-band, e.g. via a
+# messaging app on a second device)
+```
+**Expected**: pairing and a subsequent send-and-apply complete over the
+public DHT/hole-punching path with no LAN shortcut available — this is
+the one scenario in the whole project that actually exercises real NAT
+traversal end to end rather than two processes on the same machine or
+the emulator's host-NAT. Record connect latency; if it fails, capture
+whether it's a DHT bootstrap issue or a hole-punch failure (different
+follow-ups).
+
+### 4. Spec §7 three-device e2e gate
+
+The project's original acceptance bar
+(`docs/superpowers/specs/2026-08-16-pear-wallpaper-design.md` §7):
+> manual e2e checklist on real devices — pair Mac + Windows + Android,
+> send every direction, sleep/queue scenario, Android background apply,
+> revoke and confirm lockout.
+
+No Windows shell exists yet (out of scope for this plan — the design doc
+itself notes emulator+phone stand in for Windows until one does), so the
+practical version of this gate is **Mac (real desktop app, not a
+scripted peer) + physical Android phone**:
+
+1. Pair the two (QR from desktop's `DeviceList`, scanned by the phone's
+   camera — the one pairing path this whole task series has never
+   actually exercised with a real display+camera; every prior Act used
+   paste-invite or a scripted peer specifically because no display was
+   available).
+2. Send a wallpaper in both directions (Mac → phone, phone's share sheet
+   → Mac) — confirm both apply/deliver.
+3. Queue-while-offline: put the phone in airplane mode, send from Mac,
+   confirm it queues (not delivered) on Mac's `Send`/roster UI, then
+   bring the phone back online and confirm delivery completes without
+   re-sending.
+4. Background apply: background the phone, send from Mac, foreground the
+   phone, confirm apply (this doc's Act 7 already proved this on the
+   emulator — re-run once on real hardware for the full gate's sake).
+5. Revoke: remove the phone from Mac's Devices tab, confirm (per this
+   doc's Act 8 finding) that the phone silently goes to a permanent
+   offline-looking state with no distinct "revoked" message — decide at
+   that point whether that UX gap needs a follow-up task or is accepted
+   as-is for this milestone.
+
+**Expected**: every step above passes exactly as its emulator-only analog
+did earlier in this document (Acts 2–8), with the QR-scan pairing path
+being the one genuinely new surface (untested end to end anywhere in this
+project so far).

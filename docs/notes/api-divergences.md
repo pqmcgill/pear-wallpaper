@@ -791,6 +791,86 @@ verified in a way relevant to this integration point.
   have `worklet-client.js` await the `'ready'` evt before its first
   `getState` call.
 
+## Task 8 (android-shell): Step 1 health check — expo-share-intent is actively maintained and has an exact SDK-55-matching release; pinned `6.1.1`
+
+**Verdict: HEALTHY. Proceed with `expo-share-intent@6.1.1`, no fallback needed.**
+
+- `npm view expo-share-intent time.modified versions dist-tags`: 73 published
+  versions, most recent (`8.0.1`) published a month before this task
+  (`2026-07-10`), and the GitHub repo (`achorein/expo-share-intent`) shows
+  603 stars, 44 open issues, last push `2026-07-10T15:15:05Z` — actively
+  maintained, not abandoned.
+- **The repo publishes a README "Versioning" table mapping Expo SDK to a
+  supported package major** (`SDK 57 -> 8.0+`, `SDK 56 -> 7.0+`, `SDK 55 ->
+  6.0+`, `SDK 54 -> 5.0+`), and the maintainer has shipped a same-day SDK-
+  support release for every recent Expo SDK bump (`6.0.0`'s changelog:
+  "Features: support Expo SDK 55" — closed issue #203, opened/closed
+  2026-02-25, the same day `6.0.0` published). This project pins
+  `expo@55.0.23` (SDK 55) — `expo-share-intent@6.1.1` (`npm view
+  expo-share-intent@6.1.1 peerDependencies`: `"expo": "^55"`) is the last,
+  and most-patched, release in that SDK's supported line before `7.0.0`
+  moved on to SDK 56 (`2026-06-06`). Its own `dependencies` (`@expo/config-
+  plugins@~55.0.6`, `expo-constants@~55.0.7`, `expo-linking@~55.0.7`) are
+  all satisfied by versions already resolved in this project's tree
+  (`expo-constants@55.0.16`, `expo-linking@55.0.15`).
+- **Skimmed GitHub issues for the installed SDK / this integration's exact
+  shape (Android, expo-router, dev-client).** No open issue blocks this
+  task:
+  - Issue #202/#203 ("Expo sdk 55 compatibility" / "feat: support Expo SDK
+    55") — both closed by the `6.0.0` release itself.
+  - Issue #200 ("Duplicate intent-filter everytime `expo prebuild` is run",
+    open) — only reproduces on a **non**-`--clean` prebuild; this task's
+    Step 4 (and every prior app.json-changing task per the Task 6 lesson,
+    above) always does a full `--clean` prebuild, so it doesn't apply here.
+  - Issue #186 ("Android - Share Intent doesn't work if app is force closed
+    or not in background", closed) — root-caused in the thread itself to an
+    **Expo dev-client-specific** quirk (share intents were reportedly lost
+    on cold start under `expo run:android`'s dev-client, but worked in a
+    production/bundled APK); flagged here as a real risk for this task's
+    Step 4 cold-start QA (which necessarily uses the same dev-client build
+    every other Act in this file has used) — see the QA note below for how
+    it actually played out on this SDK/version.
+  - Fixed in the pinned `6.1.1` itself: "make deeplink unique on each
+    share" (#212, `6.1.1`'s changelog) resolves issue #208 (`useShareIntent`
+    stopped detecting new assets after a second share from the same
+    source app) — directly relevant since this task's QA plan shares more
+    than once per session.
+- **Read `node_modules/expo-share-intent`'s actual installed source**
+  (`build/ExpoShareIntentModule.js`, `build/useShareIntent.js`,
+  `build/utils.js`) rather than trusting the README summary alone, since
+  this determines whether `_layout.js` can safely import it unconditionally
+  (this app's `smoke.test.js` transitively imports `_layout.js`'s module
+  scope via `app/index.js`, with no native module registered under jest —
+  the exact shape of Task 6's `requireNativeModule()`-throws-under-jest
+  bug):
+  - `ExpoShareIntentModule.js` calls `requireOptionalNativeModule(...)`,
+    not `requireNativeModule(...)` — this resolves to `undefined` under
+    jest instead of throwing, and every internal call site already guards
+    with `ExpoShareIntentModule?.method(...)`. **No lazy-resolution
+    workaround needed here, unlike Task 6's local `wallpaper-setter`
+    module** — confirmed empirically: `npm run test:ui` stayed green with
+    `_layout.js` importing `useShareIntent` at module scope, no mock
+    required for `expo-share-intent` itself.
+  - `useShareIntent()`'s Android path doesn't depend on deep-link URL
+    parsing at all (that's iOS-only, per `refreshShareIntent()`'s `else if
+    (Platform.OS === "android") ExpoShareIntentModule?.getShareIntent("")`)
+    — it unconditionally queries the native module's held intent state on
+    mount and on every `AppState` transition to `'active'`. This means
+    Android's cold-start path does **not** need `expo-router`'s
+    `+native-intent.ts` redirect mechanism (which the package's own
+    `example/expo-router` demonstrates as a belt-and-suspenders addition,
+    primarily for iOS's URL-based routing) — a plain `useShareIntent()`
+    call inside `_layout.js`'s already-existing top-level effect is
+    sufficient for both cold and warm starts on this platform. Kept scope
+    to exactly the brief's file list (no `app/+native-intent.ts` added) on
+    this basis; verified live in Step 4's QA (see `docs/notes/qa-android.md`
+    Act 5) rather than only by source-reading.
+  - `utils.js`'s `parseShareIntent` confirms Android's
+    `shareIntent.files[].path` is populated from whichever of `file.path`,
+    `` `file://${file.filePath}` ``, or `file.contentUri` is present — i.e.
+    it can genuinely be a raw `content://` URI, matching the brief's
+    `stageSharedImage` assumption exactly (not just a hedge).
+
 ## Task 7 (android-shell): two real UI bugs found via on-device QA, both fixed; one environment limitation flagged, not fixed
 
 - **`MainView`'s nav row rendered underneath the (translucent) status

@@ -1,11 +1,13 @@
 import { createContext, useEffect, useReducer, useState } from 'react'
 import { AppState } from 'react-native'
-import { Slot } from 'expo-router'
+import { Slot, useRouter } from 'expo-router'
+import { useShareIntent } from 'expo-share-intent'
 import { reduce, initialSnapshot } from '../lib/store'
 import { getBridge, getWorklet } from '../lib/worklet-client'
 import { createApplyController } from '../lib/apply-controller'
 import { setWallpaper } from '../modules/wallpaper-setter'
 import { getTarget } from '../lib/settings'
+import { stageSharedImage } from '../lib/share-target'
 
 // Default value covers the case where a screen is rendered outside this
 // provider (e.g. a unit test that mounts app/index.js directly): bridge is
@@ -16,6 +18,32 @@ export const SnapshotContext = createContext({ snapshot: initialSnapshot, bridge
 export default function Layout () {
   const [snapshot, dispatch] = useReducer(reduce, initialSnapshot)
   const [bridge, setBridge] = useState(null)
+  const router = useRouter()
+
+  // Share-sheet entry point (Task 8). expo-share-intent@6.1.1's Android path
+  // (useShareIntent.js's refreshShareIntent()) doesn't depend on deep-link
+  // URL parsing at all — it unconditionally asks the native module for its
+  // held intent state on mount and on every foreground transition — so a
+  // plain useShareIntent() call here covers both cold start (worklet not
+  // yet started; getBridge()'s queue-until-ready gate below handles that,
+  // same as every other bridge.call in this file) and warm start (app
+  // already running, a new share arrives). See docs/notes/api-divergences.md
+  // for why this is sufficient without expo-router's +native-intent.ts.
+  const { hasShareIntent, shareIntent, resetShareIntent } = useShareIntent()
+
+  useEffect(() => {
+    if (!hasShareIntent) return
+    const file = shareIntent.files && shareIntent.files[0]
+    resetShareIntent()
+    if (!file) return
+    // stageSharedImage (lib/share-target.js) copies the shared content://
+    // (or file://) URI into a real path under the documents dir — the
+    // worklet's Bare fs (core.sendWallpaper's readFile) cannot open a
+    // content:// URI at all, only expo-file-system's RN-side File/Directory
+    // classes can. Route params carry the staged path to /send.
+    const filePath = stageSharedImage(file.path)
+    router.replace({ pathname: '/send', params: { filePath } })
+  }, [hasShareIntent])
 
   useEffect(() => {
     // Single-writer rule, enforcement point 1: getBridge() is a module-level

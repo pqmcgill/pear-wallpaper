@@ -5,7 +5,7 @@
     "version": "1.0.0",
     "newArchEnabled": true,
     "orientation": "portrait",
-    "scheme": "to.holepunch.bare.expo",
+    "scheme": "pearwallpaper",
     "icon": "./assets/images/icon.png",
     "userInterfaceStyle": "automatic",
     "splash": {
@@ -23,10 +23,14 @@
         "backgroundColor": "#ffffff"
       },
       "package": "com.pearwallpaper.app",
-      "permissions": ["android.permission.SET_WALLPAPER"]
+      "permissions": [
+        "android.permission.SET_WALLPAPER"
+      ]
     },
     "plugins": [
-      ["expo-router"],
+      [
+        "expo-router"
+      ],
       [
         "expo-build-properties",
         {
@@ -43,7 +47,13 @@
           "recordAudioAndroid": false
         }
       ],
-      "./plugins/withGradleJvmFix"
+      "./plugins/withGradleJvmFix",
+      [
+        "expo-share-intent",
+        {
+          "androidIntentFilters": ["image/*"]
+        }
+      ]
     ]
   }
 }

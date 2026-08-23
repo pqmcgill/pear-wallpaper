@@ -648,3 +648,181 @@ resume-tmp.js` scripts deleted (`git status` clean before commit —
 confirmed, only the task's real source/test files and this doc are
 tracked changes). `npm run test:ui`: 41/41. `npm run test:worklet`:
 unchanged, 2/2 tests, 8/8 asserts.
+
+## Act 5 — Share-sheet send: Android is the sender, first Android→desktop milestone (2026-08-23)
+
+New this Act: `app/send.js` (the Send screen — image preview + per-device
+`Switch` targets, ported from `desktop/ui/components/Send.js`'s selection
+logic), `lib/share-target.js` (`stageSharedImage(uri)`), a share-intent hook
+in `_layout.js` (`useShareIntent()` from `expo-share-intent@6.1.1` — see
+`docs/notes/api-divergences.md` for the Step 1 health check that pinned this
+version), and `app.json` changes: `scheme` renamed `to.holepunch.bare.expo`
+→ `pearwallpaper` (the controller-folded deferred finding from Task 7;
+confirmed load-bearing — `expo-share-intent`'s `getScheme()` reads
+`Constants.expoConfig.scheme` to build its native-module cache-clearing key)
+and the `expo-share-intent` config plugin with
+`androidIntentFilters: ["image/*"]` (its default is text-only). Config
+plugin changed the manifest ⇒ full `npx expo prebuild --platform android
+--clean` then `npm run android`, same lesson as Tasks 6/7.
+`npm run test:ui`: 47/47 (41 carried + 6 new `send-screen.test.js` cases —
+4 for the Send screen's target-selection/disabled-state/error behavior, 2
+for `stageSharedImage`). `npm run test:worklet`: unchanged, 2/2 tests, 8/8
+asserts.
+
+For this milestone the **Android device is the sender** and the **peer is
+the receiver** — the reverse of every prior Act. Topology: a scripted
+desktop-stand-in peer (`desktop/qa8-peer-tmp.js`, throwaway, deleted before
+commit — same real-`WallpaperCore` pattern as every prior Act's scripted
+peer) creates the group and invite (Task 7's proven-fast direction: peer
+creates, emulator joins); the emulator pastes the invite via `Onboarding`
+and joins in seconds. The peer then just listens for the `'wallpaper'`
+event — this Act's actual subject is entirely on the Android side.
+
+### Setup
+
+```bash
+# Terminal A — scripted desktop peer (creator; real WallpaperCore, listens
+# for the 'wallpaper' event once the phone shares)
+cd desktop && node qa8-peer-tmp.js
+
+# Terminal B — emulator, same env exports as every prior Act
+export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
+export ANDROID_HOME="$HOME/Library/Android/sdk"
+export PATH="$PATH:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator"
+adb shell pm clear com.pearwallpaper.app
+adb shell am start -n com.pearwallpaper.app/.MainActivity
+# ...paste the printed invite into Onboarding, tap "Join a group" (Act 2's
+# mechanics) — roster shows the peer within seconds.
+```
+
+Test image: a distinctive 480×480 solid bright-lime-green PNG
+(`scratchpad/t8-gen-png.js`, throwaway, hand-built raw-PNG-chunks technique
+identical to Task 6's magenta one), pushed to the emulator's Downloads and
+media-scanned so it appears as a real gallery image with a `content://` URI:
+
+```bash
+adb push t8-qa-wallpaper.png /sdcard/Download/t8-qa-wallpaper.png
+adb shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE \
+  -d file:///sdcard/Download/t8-qa-wallpaper.png
+adb shell content query --uri content://media/external/images/media \
+  --projection _id:_display_name:_data   # confirms the row + real _id
+```
+
+### adb-vs-UI path used, and why
+
+**Used the adb-direct-intent path** (`am start -a android.intent.action.SEND
+-t image/png --eu android.intent.extra.STREAM content://.../<id>
+-c android.intent.category.DEFAULT --grant-read-uri-permission`, **no**
+`-n <component>`), for a deliberate reason beyond "UI-driving proved
+flaky": this project's stock AVD has Google Photos installed but no
+usable local-file gallery/Files-app share flow that's scriptable without
+either a Google account sign-in (Photos) or blind multi-screen navigation
+through `documentsui` with unknown layouts per Android version. Omitting
+`-n` means the intent is **implicit** — Android resolves it through the
+real system `ResolverActivity` (the actual share sheet), so this still
+exercises the real manifest intent-filter matching, not a fast-path
+bypass straight into the app. Confirmed live: the resulting sheet listed
+**"Pear Wallpaper"** (with its real launcher icon) as the top entry,
+alongside Maps/Bluetooth/Gmail — proof the `expo-share-intent` config
+plugin's manifest intent-filter (`action.SEND` + `image/*`) is correctly
+registered and Android's package manager genuinely offers this app for
+image shares, not just that the app can handle an intent aimed
+directly at it. Screenshots: `scratchpad/t8-3b-sheet.png` (chooser with
+Pear Wallpaper listed), `scratchpad/t8-9-cold-sheet.png` (the cold-start
+sheet, showing Android's "Share with Pear Wallpaper" quick-repeat banner
+from the prior "Just once" choice).
+
+**adb coordinate gotcha (recorded in Act 2, hit again here):** screenshots
+read back into this session render at 900×2000 for a real 1080×2400
+device — every tap coordinate below is the *real* (×1.2) value, not the
+screenshot's displayed pixel. Mis-scaling once mid-session (tapping the
+sheet's "Just once" button at the screenshot's raw pixel value) landed on
+the "Maps" row instead and had to be recovered by re-selecting "Pear
+Wallpaper" and retrying with the corrected coordinate — same trap, same
+fix as Act 2.
+
+### Warm start — app already running, share arrives while backgrounded
+
+1. Fired the SEND intent (above) while the app sat on `MainView`'s
+   Devices tab (backgrounded, not killed).
+2. Tapped "Pear Wallpaper" in the resulting share sheet, then "Just once".
+3. App foregrounded straight onto the **Send screen** — no manual
+   navigation, no flash of `MainView` first: `_layout.js`'s
+   `useShareIntent()` effect had already staged the file and called
+   `router.replace('/send', ...)` by the time the screen painted.
+   Screenshot `scratchpad/t8-4-send-screen.png`: the lime-green preview
+   image rendered correctly (proof `stageSharedImage()`'s
+   `content://`→real-file copy succeeded and the resulting path is
+   readable by RN's `Image`), plus a `qa8-desktop` row with an off
+   `Switch` and a `Send` button.
+4. Toggled the switch on (`scratchpad/t8-7-toggled.png`), pressed Send.
+5. App navigated back to `MainView`'s Devices tab immediately (Send's
+   `onSent` → `router.replace('/')`), no error banner.
+6. Peer log (`scratchpad/t8-peer.log`):
+   ```
+   === WALLPAPER EVENT ===
+   { id: '76e0b17c5c8ca7c5b616175c8493a2d2',
+     filePath: '.../received/76e0b17c5c8ca7c5b616175c8493a2d2.png',
+     fromKey: 'b13ec8950d1f31b9db76cd77af8afd18dc941603b58f7ef99bcf933280c73e2d',
+     meta: { ext: '.png', byteLength: 1769,
+       filename: '/data/user/0/com.pearwallpaper.app/files/pear-wallpaper-staging/1787510856238.png' } }
+   materialized file byteLength= 1769
+   ```
+   The `meta.filename` confirms the exact staging path
+   (`<documents>/pear-wallpaper-staging/<timestamp>.png`) `share-
+   target.js` is specified to produce. **Byte-exact verification**:
+   `md5` of the peer's materialized file and the original
+   `t8-qa-wallpaper.png` both `cc8f1321ba2519222f356ae90ae91979` — the
+   image that crossed the OS share sheet, the staging copy, hyperblobs,
+   and the desktop peer's materialize step is bit-for-bit the same file.
+
+### Cold start — app fully killed, share relaunches it straight to Send
+
+1. `adb shell am force-stop com.pearwallpaper.app`; confirmed with
+   `adb shell dumpsys activity activities | grep pearwallpaper` (no
+   output — no task, no process).
+2. Pushed a second, distinct test image (480×480 bright orange,
+   `scratchpad/t8-gen-png2.js`) and media-scanned it, so this send is
+   provably a different transfer from the warm-start one.
+3. Fired the same implicit SEND intent at the *fully-stopped* app.
+   Android's chooser this time showed a **"Share with Pear Wallpaper"**
+   quick-repeat header (remembering the prior "Just once" choice) —
+   tapped "Just once" again (`scratchpad/t8-9-cold-sheet.png`).
+4. `adb shell dumpsys activity activities` immediately after showed a
+   **new** task (`Task{... #37 ...}`) with `MainActivity` as
+   `topResumedActivity` — a genuine cold process start, not a resumed
+   background one.
+5. The app launched straight onto the **Send screen** with the orange
+   preview and the roster already populated (`scratchpad/t8-10-cold-
+   landed.png`) — no flash of `Onboarding`/`MainView` first, and no
+   error. This is the two-part proof the brief asked for:
+   `getBridge()`'s queue-until-ready gate (Task 6's fix) absorbed the
+   worklet not being started yet — the roster row rendered correctly
+   once `getState` replayed after `'ready'` — and `expo-share-
+   intent@6.1.1`'s Android path (which queries the native module's held
+   intent state unconditionally on mount, not via deep-link URL parsing)
+   delivered `hasShareIntent: true` in time for `_layout.js`'s very first
+   effect run, with no `+native-intent.ts` needed (see
+   `docs/notes/api-divergences.md`'s Step 1 write-up for why Android
+   doesn't need it here).
+6. Toggled the target switch, pressed Send. Peer log:
+   ```
+   === WALLPAPER EVENT ===
+   { id: '95fe5206b0a93659b425b4b3561d9cd6', ...,
+     meta: { ext: '.png', byteLength: 1826,
+       filename: '.../pear-wallpaper-staging/1787510958028.png' } }
+   ```
+   **Byte-exact verification**: `md5` of the peer's materialized file and
+   `t8-qa-wallpaper-cold.png` both `1640e524d443de0a517786bd0146fbf0`.
+7. App navigated back to Main cleanly, same as the warm-start case.
+   `adb logcat -d | grep -iE "pearwallpaper.*(error|exception|fatal|crash)"`
+   (excluding the known-benign `ReactNoCrashSoftException`) — no hits
+   across the whole Act.
+
+### Cleanup
+
+`adb shell pm clear com.pearwallpaper.app`; scripted peer process killed;
+`desktop/qa8-peer-tmp.js` deleted (`git status` clean before commit —
+confirmed, only this task's real source/test files and this doc are
+tracked changes). `npm run test:ui`: 47/47. `npm run test:worklet`:
+unchanged, 2/2 tests, 8/8 asserts.

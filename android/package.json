@@ -33,6 +33,7 @@
     "expo-file-system": "55.0.25",
     "expo-linking": "55.0.15",
     "expo-router": "55.0.14",
+    "expo-share-intent": "6.1.1",
     "expo-system-ui": "55.0.17",
     "pear-wallpaper-bridge": "file:../bridge",
     "pear-wallpaper-core": "file:../core",

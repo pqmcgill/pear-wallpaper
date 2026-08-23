@@ -465,3 +465,38 @@
   `qr.test.js` cases). `npm run test:worklet`: unchanged, 2/2 tests, 8/8
   asserts. Full narrative, bug writeups, and screenshots in
   `docs/notes/qa-android.md` Act 4 and `docs/notes/api-divergences.md`.
+- 2026-08-23 Android-shell Task 8: share-sheet send — first Android→desktop
+  milestone. Step 1 health check verdict: HEALTHY —
+  `expo-share-intent@6.1.1` is the last release in the SDK-55-supported
+  line (its own README's version table), actively maintained (603 stars,
+  pushed within the month), read its installed source directly to confirm
+  `requireOptionalNativeModule` (not the throws-under-jest
+  `requireNativeModule`) needs no lazy-resolution workaround, and confirmed
+  Android's path doesn't depend on deep-link parsing so no
+  `+native-intent.ts` is needed on this platform. `app.json`'s `scheme`
+  renamed `to.holepunch.bare.expo` → `pearwallpaper` (Task 7's folded
+  deferred finding — confirmed load-bearing, the library reads it to key
+  its native-module cache) plus `androidIntentFilters: ["image/*"]` (default
+  is text-only). New: `lib/share-target.js`'s `stageSharedImage(uri)`
+  (copies a shared `content://`/`file://` URI into
+  `<documents>/pear-wallpaper-staging/<timestamp>.<ext>` via
+  expo-file-system — the worklet's Bare fs can't open a content:// URI at
+  all); `app/send.js` (image preview + per-device `Switch` targets, ported
+  from desktop's `Send.js` selection logic); a `useShareIntent()` hook in
+  `_layout.js` that stages the file and `router.replace('/send', ...)`.
+  TDD'd first against a mocked `expo-file-system`/fake bridge
+  (`test/send-screen.test.js`). `npm run test:ui`: 47/47 (41 carried + 6
+  new). `npm run test:worklet`: unchanged, 2/2 tests, 8/8 asserts.
+  On-device QA (Android as *sender* this time, a scripted desktop peer as
+  receiver): the real system share sheet listed "Pear Wallpaper" for an
+  `image/png` SEND intent fired via adb (implicit, no `-n`, so it
+  genuinely round-tripped through `ResolverActivity`); warm start (app
+  backgrounded) and cold start (`am force-stop` first, confirmed no task
+  existed, then the intent relaunched the process straight onto the Send
+  screen) both landed byte-exact transfers at the peer (`md5` of the
+  peer's materialized file matched the source PNG in both cases) with no
+  errors in logcat. Cold start needed no extra plumbing beyond
+  `getBridge()`'s existing queue-until-ready gate (Task 6) plus
+  `expo-share-intent`'s own unconditional on-mount native-module query.
+  Full narrative, screenshots, and byte-hash evidence in
+  `docs/notes/qa-android.md` Act 5 and `docs/notes/api-divergences.md`.

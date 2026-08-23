@@ -21,29 +21,29 @@
   },
   "homepage": "https://github.com/holepunchto/bare-expo#readme",
   "dependencies": {
-    "b4a": "^1.6.7",
-    "expo": "~55.0.23",
-    "expo-build-properties": "~55.0.9",
-    "expo-constants": "~55.0.7",
-    "expo-linking": "~55.0.15",
-    "expo-router": "~55.0.14",
-    "expo-system-ui": "~55.0.17",
+    "b4a": "1.8.1",
+    "expo": "55.0.23",
+    "expo-build-properties": "55.0.13",
+    "expo-constants": "55.0.16",
+    "expo-linking": "55.0.15",
+    "expo-router": "55.0.14",
+    "expo-system-ui": "55.0.17",
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "react-native": "0.83.6",
-    "react-native-b4a": "^0.0.4",
+    "react-native-b4a": "0.0.4",
     "react-native-bare-kit": "0.15.0",
-    "react-native-safe-area-context": "~5.6.0",
-    "react-native-screens": "~4.23.0"
+    "react-native-safe-area-context": "5.6.2",
+    "react-native-screens": "4.23.0"
   },
   "devDependencies": {
     "@testing-library/react-native": "14.0.1",
-    "@types/react": "~19.2.10",
+    "@types/react": "19.2.14",
     "jest": "29.7.0",
     "jest-expo": "55.0.21",
     "patch-package": "8.0.1",
-    "prettier": "^3.3.3",
-    "prettier-config-holepunch": "^2.0.0",
-    "typescript": "^5.3.3"
+    "prettier": "3.8.3",
+    "prettier-config-holepunch": "2.0.0",
+    "typescript": "5.9.3"
   }
 }

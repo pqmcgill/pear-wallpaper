@@ -477,3 +477,19 @@ scaffold itself — recorded here in full since they gate the whole plan.
   unresolved promise threw `TypeError: toJSON is not a function`.
   `test/smoke.test.js`'s test is `async` and does
   `const { toJSON } = await render(<Screen />)`.
+
+## Task 2 review fix: pin sweep was incomplete first pass
+
+The first pass only pinned `react-native-bare-kit` exact, leaving the
+brief's global "no `^`/`~`" constraint unapplied to everything else
+`bare-expo` installed with ranges (`b4a`, `expo`, `expo-build-properties`,
+`expo-constants`, `expo-linking`, `expo-router`, `expo-system-ui`,
+`react-native-b4a`, `react-native-safe-area-context`,
+`react-native-screens`, `@types/react`, `prettier`,
+`prettier-config-holepunch`, `typescript`) — an undisclosed spec gap
+caught in review, not a newly-discovered API divergence. Fixed by pinning
+every `android/package.json` dependency/devDependency to the version
+already resolved in `package-lock.json`, then regenerating the lockfile
+(`npm install`) and confirming `npm ci` installs cleanly from it — see
+the fix report appended to `task-2-report.md` for the exact versions and
+verification output.

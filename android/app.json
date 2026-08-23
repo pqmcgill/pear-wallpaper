@@ -51,9 +51,12 @@
       [
         "expo-share-intent",
         {
-          "androidIntentFilters": ["image/*"]
+          "androidIntentFilters": [
+            "image/*"
+          ]
         }
-      ]
+      ],
+      "expo-background-task"
     ]
   }
 }

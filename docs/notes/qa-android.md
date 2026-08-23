@@ -826,3 +826,107 @@ fix as Act 2.
 confirmed, only this task's real source/test files and this doc are
 tracked changes). `npm run test:ui`: 47/47. `npm run test:worklet`:
 unchanged, 2/2 tests, 8/8 asserts.
+
+## Act 6 — Background sync: opportunistic apply while backgrounded/killed (2026-08-23)
+
+Task 9. See `docs/notes/headless-worklet-spike.md` for the mandatory
+spike (verdict: PASS) that ran before any of `lib/background-sync.js` was
+written. This Act QAs the real implementation, registered as task
+`pear-wallpaper-sync` (`app/_layout.js`, module scope) with
+`BackgroundTask.registerTaskAsync(..., { minimumInterval: 15 })`.
+
+Setup: scripted desktop peer (`desktop/qa9-peer-tmp.js`, same shape as
+Task 6/8's scripted peers) created a group, printed an invite, and waited
+on trigger files so each of its three sends could be timed against a
+specific phone state. Joined from the emulator via paste-invite (same
+flow as prior Acts). Three distinct 320×320 PNGs (red/green/blue,
+`scratchpad/t9-wallpaper-{a,b,c}.png`) so each transfer is unambiguous
+both visually and by hash.
+
+### (a) Backgrounded, process alive — the "nudge" path
+
+`adb shell input keyevent KEYCODE_HOME`, then the peer sent wallpaper A
+(red) to the still-online device. Forced the job
+(`adb shell cmd jobscheduler run -f com.pearwallpaper.app <jobId>`, id
+read from `adb shell dumpsys jobscheduler`). logcat:
+```
+BackgroundTaskConsumer: Executing task 'pear-wallpaper-sync'
+ReactNativeJS: '[background-sync]', 'nudged-resident'
+```
+`adb shell dumpsys wallpaper` before/after: `id=5` → `id=6` (new
+`SET_STATIC` record). `adb exec-out screencap -p` after `KEYCODE_HOME`
+(`t9-5-backgrounded-red.png`): the entire home screen is solid red.
+**This is the single-writer guard's real proof**: `isActive()` saw the
+resident worklet (started at app mount, already past `'ready'`) and
+`runBoundedSyncRound()` took the nudge branch — `bridge.call('syncNow')`
++ `applyPending()` on the *existing* bridge, never `new Worklet()`.
+Repeated later with wallpaper C (blue) for a second data point: same
+`'nudged-resident'` log, `id=6` → `id=7`, screenshot
+`t9-8-blue-guard-confirm.png` solid blue — reproducible.
+
+### (b) Killed via `am kill` (background kill, not force-stop)
+
+`adb shell am kill com.pearwallpaper.app` (confirmed dead: `pidof` exit
+1). Peer sent wallpaper B (green) — `roster-changed` showed the device
+`online: false`, so this queued in the replicated log rather than
+delivering live. Forced the job: the OS **did** respawn the process (new
+pid) to service it — a real, meaningful difference from force-stop — but
+`adb shell dumpsys activity processes` showed it hit `isFrozen=true`
+before React Native's JS ever logged `"Running main"`, both times this
+was tried. No `background-sync` log line, no wallpaper change
+(`dumpsys wallpaper` unchanged). This is an honest negative result, not an
+implementation bug — same freeze-before-JS-boot behavior the spike
+documented, plausibly worse on this debug build (JS fetched from Metro
+over the network on every cold boot vs. embedded in a release APK).
+**Recovery**: `adb shell am start` on the same task brought the frozen
+process to the foreground, which unfroze it — RN finished booting,
+`_layout.js`'s normal mount-time `getState`/`applyPending` path (the
+*guaranteed* path, not background-sync) drained the queued wallpaper B
+immediately. Screenshot `t9-7-appopen-recovered-green.png`: solid green.
+Exactly the spec's framing — background is opportunistic, sync-on-open is
+guaranteed — demonstrated end to end, not just asserted.
+
+Force-stop, for contrast: `adb shell am force-stop`, then
+`dumpsys jobscheduler` showed **zero** jobs for the app immediately
+(force-stop cancels them), and forcing failed outright
+(`Could not find job 0 in package com.pearwallpaper.app`) — the
+documented-and-accepted Android behavior, confirmed rather than assumed.
+
+### Guard check with the app genuinely foregrounded
+
+Brought the app to the foreground, forced the job again. **Divergence
+from the brief's literal expectation**: no `nudged-resident` (or any
+`background-sync`) log appears at all — `BackgroundTaskScheduler.kt`'s
+`runTasks()` checks `inForeground` (toggled by
+`OnActivityEntersForeground`/`Background`) *before* invoking any task
+consumer, for both forcing methods (`triggerTaskWorkerForTestingAsync`
+and `adb ... run -f` are the same call underneath — confirmed by reading
+`BackgroundTaskModule.kt`). logcat instead shows only:
+```
+BackgroundTaskScheduler: runTasks: App is in the foreground
+BackgroundTaskScheduler: Enqueuing worker ... '15' minutes delay.
+```
+So "no second worklet while foregrounded" is structurally guaranteed —
+our task body never runs at all in that state, by the library's own
+design, not by our guard. The guard our code owns (`isActive()`) is
+instead proven by (a) above (real device, `nudged-resident`, zero new
+`Worklet` instances) and by `background-sync.test.js`'s guard test
+(`__instances` stays empty).
+
+### Byte-exact verification
+
+Pulled all three received files via `adb shell run-as com.pearwallpaper.app
+cat files/pear-wallpaper/received/<id>.png`; `md5` of each matched its
+source PNG exactly (`149c4e3a...`, `4d266894...`, `8bffa2a0...`). The
+peer's final `listSends()` showed all three targets `"delivered"` —
+including wallpaper B, whose ack only round-tripped after the app
+reopened and synced.
+
+### Cleanup
+
+`adb shell pm clear com.pearwallpaper.app`; peer process killed;
+`desktop/qa9-peer-tmp.js` deleted; scratchpad PNGs/screenshots left
+outside the repo (`git status` clean before commit — confirmed, only
+Task 9's real source/test files and docs are tracked changes). `npm run
+test:ui`: 57/57 (54 carried + 3 new `background-sync.test.js` cases).
+`npm run test:worklet`: unchanged, 2/2 tests, 8/8 asserts.

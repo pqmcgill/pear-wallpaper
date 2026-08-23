@@ -500,3 +500,41 @@
   `expo-share-intent`'s own unconditional on-mount native-module query.
   Full narrative, screenshots, and byte-hash evidence in
   `docs/notes/qa-android.md` Act 5 and `docs/notes/api-divergences.md`.
+- 2026-08-23 Android-shell Task 9: background sync — spike first, then
+  build. **Spike verdict: PASS** (`docs/notes/headless-worklet-spike.md`):
+  a throwaway headless `expo-background-task` body started a Bare Worklet
+  with an inline echo source and round-tripped one IPC frame while the app
+  was backgrounded. Found and fixed a real bug along the way — an inline
+  (non-bundled) `Worklet#start` source needs a non-`.bundle` filename
+  (`.bundle` triggers bare-bundle parsing and crashes the native thread);
+  also no global `Buffer` on either side, use `b4a`. Also discovered
+  `triggerTaskWorkerForTestingAsync` and `adb ... jobscheduler run -f` are
+  the same call underneath (`BackgroundTaskScheduler.runTasks()`) and both
+  no-op while the app is foregrounded, by design. Built the real
+  `lib/background-sync.js`'s `runBoundedSyncRound()` per the brief's sketch
+  (single divergence: returns `'nudged-resident'`, not the prose's
+  `'skipped-active'`, matching the sketch code over the prose). Extracted
+  `lib/worklet-identity.js` (`getStorageDir`/`getDeviceName`) so
+  `worklet-client.js` and `background-sync.js` construct the corestore
+  path identically — divergent values would silently fork one phone into
+  two device identities. Added `worklet-client.js`'s `isActive()` (true
+  only once the resident worklet reaches `'ready'`) — the single-writer
+  guard's enforcement point 2. TDD'd against a mocked
+  `react-native-bare-kit`/`worklet-client` (`test/background-sync.test.js`):
+  full round trip (init→ready→syncNow→drain→shutdown→terminate) and the
+  guard (`isActive()` true ⇒ nudge the resident bridge, zero `Worklet`
+  instances constructed). `npm run test:ui`: 57/57 (54 carried + 3 new).
+  `npm run test:worklet`: unchanged, 2/2 tests, 8/8 asserts. On-device QA
+  (scripted desktop peer, three distinct test images): backgrounded +
+  forced job → `'nudged-resident'`, wallpaper changed, byte-exact,
+  reproduced twice; killed via `am kill` (not force-stop) → process
+  respawned but froze before RN JS finished booting, task never ran (spec-
+  accepted opportunism) — the pending wallpaper still applied correctly
+  once the app was reopened, via the guaranteed sync-on-open path;
+  force-stop → job scheduler drops the job immediately, confirmed rather
+  than assumed. Foregrounded guard check surfaced a divergence from the
+  brief's literal expectation: no `background-sync` log appears at all
+  while foregrounded (platform-level no-op, not our guard) — the
+  no-second-worklet guarantee is instead proven by the backgrounded case
+  and the unit test. Full narrative, logcat excerpts, dumpsys wallpaper
+  before/after, and md5 evidence in `docs/notes/qa-android.md` Act 6.

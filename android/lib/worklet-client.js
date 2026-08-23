@@ -1,8 +1,7 @@
 import { Worklet } from 'react-native-bare-kit'
 import { createDuplexJsonTransport } from 'pear-wallpaper-bridge/transport'
 import { createBridgeUi } from 'pear-wallpaper-bridge/ui'
-import * as Device from 'expo-device'
-import { Paths } from 'expo-file-system'
+import { getStorageDir, getDeviceName } from './worklet-identity'
 // bare-pack's --out .../worklet.bundle.mjs (bundle:worklet script) is an ES
 // module wrapper whose default export is the raw bundle source string
 // (bare-pack README's "bundle format" table: `bundle.mjs` -> ".bundle.mjs"
@@ -51,6 +50,7 @@ export function getBridge () {
 
   realBridge.on('ready', () => {
     ready = true
+    instance.ready = true
     // Replay in arrival order; each call's own request/response id
     // round-trip through the real bridge from here, same as any call made
     // after ready.
@@ -89,8 +89,8 @@ export function getBridge () {
   // was: nothing reaches the wire before the host is listening for it.
   transport.send({
     t: 'init',
-    storageDir: `${documentsPath()}/pear-wallpaper`,
-    deviceName: Device.modelName || 'Android device'
+    storageDir: getStorageDir(),
+    deviceName: getDeviceName()
   })
 
   instance = { worklet, bridge, transport }
@@ -101,12 +101,12 @@ export function getWorklet () {
   return instance ? instance.worklet : null
 }
 
-// expo-file-system (SDK 54+) dropped the string constant `documentDirectory`
-// for `Paths.document`, a Directory whose `.uri` is a file:// URI (Android's
-// native constant is literally `Uri.fromFile(context.filesDir).toString()`).
-// The worklet's corestore (core/index.js: `new Corestore(storageDir + ...)`)
-// wants a plain filesystem path, same as desktop's `app.getPath('userData')`
-// — so the scheme is stripped here rather than passed through.
-function documentsPath () {
-  return Paths.document.uri.replace(/^file:\/\//, '').replace(/\/$/, '')
+// Single-writer guard, consumed by Task 9's background-sync.js: true once
+// this resident worklet has actually reached 'ready' (not merely
+// constructed — a still-initializing worklet isn't safely nudgeable yet,
+// and if init fails the singleton is cleared before this could ever read
+// stale-true). The bounded background round uses this to decide whether to
+// nudge the resident worklet's bridge instead of opening a second one.
+export function isActive () {
+  return instance !== null && instance.ready === true
 }

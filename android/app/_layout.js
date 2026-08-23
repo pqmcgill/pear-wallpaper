@@ -8,6 +8,28 @@ import { createApplyController } from '../lib/apply-controller'
 import { setWallpaper } from '../modules/wallpaper-setter'
 import { getTarget } from '../lib/settings'
 import { stageSharedImage } from '../lib/share-target'
+import * as TaskManager from 'expo-task-manager'
+import * as BackgroundTask from 'expo-background-task'
+import { runBoundedSyncRound } from '../lib/background-sync'
+
+// Task 9: background sync. Registered at MODULE scope (not inside the
+// component/effect below) because expo-task-manager re-runs this whole JS
+// bundle headless to invoke the task body — a defineTask call made only
+// inside a mounted component would never exist in that headless run.
+// docs/notes/headless-worklet-spike.md's throwaway spike proved a headless
+// task body can start a Worklet and complete an IPC round trip while the
+// app is backgrounded; this wraps the real bounded round the same way.
+const SYNC_TASK_NAME = 'pear-wallpaper-sync'
+TaskManager.defineTask(SYNC_TASK_NAME, async () => {
+  try {
+    const result = await runBoundedSyncRound()
+    console.log('[background-sync]', result)
+    return BackgroundTask.BackgroundTaskResult.Success
+  } catch (err) {
+    console.log('[background-sync] failed:', err && err.message)
+    return BackgroundTask.BackgroundTaskResult.Failed
+  }
+})
 
 // Default value covers the case where a screen is rendered outside this
 // provider (e.g. a unit test that mounts app/index.js directly): bridge is
@@ -44,6 +66,14 @@ export default function Layout () {
     const filePath = stageSharedImage(file.path)
     router.replace({ pathname: '/send', params: { filePath } })
   }, [hasShareIntent])
+
+  // Task 9: register the bounded background round. minimumInterval is in
+  // minutes (expo-background-task's BackgroundTaskOptions) — 15 is the
+  // platform floor; Android treats it as opportunistic, not exact.
+  useEffect(() => {
+    BackgroundTask.registerTaskAsync(SYNC_TASK_NAME, { minimumInterval: 15 })
+      .catch((err) => console.log('[background-sync] register failed', err && err.message))
+  }, [])
 
   useEffect(() => {
     // Single-writer rule, enforcement point 1: getBridge() is a module-level

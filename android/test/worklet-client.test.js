@@ -36,9 +36,9 @@ beforeEach(() => {
 })
 
 function load () {
-  const { getBridge } = require('../lib/worklet-client')
+  const { getBridge, isActive } = require('../lib/worklet-client')
   const { __instances } = require('react-native-bare-kit')
-  return { getBridge, __instances }
+  return { getBridge, isActive, __instances }
 }
 
 function sendFrame (ipc, msg) {
@@ -145,6 +145,33 @@ test('calls made after ready pass through immediately, with no queueing', async 
   sendFrame(w.IPC, { t: 'res', id: req.id, ok: true, value: null })
 
   await expect(callPromise).resolves.toBeNull()
+})
+
+// --- Task 9: isActive() — the single-writer guard background-sync.js
+// consults before deciding whether to nudge the resident worklet instead
+// of opening a second one. -------------------------------------------
+
+test('isActive() is false before any getBridge() call and false while a worklet is still initializing', () => {
+  const { getBridge, isActive } = load()
+  expect(isActive()).toBe(false)
+  getBridge()
+  expect(isActive()).toBe(false) // not ready yet — no 'ready' evt sent
+})
+
+test('isActive() is true once the resident worklet has reached ready', () => {
+  const { getBridge, isActive, __instances } = load()
+  getBridge()
+  const w = __instances[0]
+  sendFrame(w.IPC, { t: 'evt', event: 'ready', payload: {} })
+  expect(isActive()).toBe(true)
+})
+
+test('isActive() goes back to false after a terminal (pre-ready) error clears the singleton', () => {
+  const { getBridge, isActive, __instances } = load()
+  getBridge()
+  const w = __instances[0]
+  sendFrame(w.IPC, { t: 'evt', event: 'error', payload: { message: 'boom' } })
+  expect(isActive()).toBe(false)
 })
 
 test('a terminal error before ready rejects any queued call and still clears the singleton', async () => {

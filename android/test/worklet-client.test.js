@@ -26,13 +26,34 @@ jest.mock('expo-file-system', () => ({
 // format" table); mocked virtual since it's gitignored build output.
 jest.mock('../app/gen/worklet.bundle.mjs', () => ({ __esModule: true, default: 'fake-bundle-source' }), { virtual: true })
 
-import { getBridge } from '../lib/worklet-client'
-const { __instances } = require('react-native-bare-kit')
+// Each test gets a fresh module registry: worklet-client.js's `instance`
+// singleton and the mocked react-native-bare-kit's `__instances` array are
+// both module-level state that would otherwise leak between tests (and the
+// readiness-queue tests below specifically need a worklet that has NOT
+// already seen a 'ready' evt from some earlier test).
+beforeEach(() => {
+  jest.resetModules()
+})
+
+function load () {
+  const { getBridge } = require('../lib/worklet-client')
+  const { __instances } = require('react-native-bare-kit')
+  return { getBridge, __instances }
+}
+
+function sendFrame (ipc, msg) {
+  ipc.emit('data', Buffer.from(JSON.stringify(msg) + '\n'))
+}
+
+function readWritten (ipc, index) {
+  return JSON.parse(ipc.written[index])
+}
 
 test('first frame is init with storageDir + deviceName; singleton thereafter', () => {
+  const { getBridge, __instances } = load()
   const bridge = getBridge()
   const w = __instances[0]
-  const first = JSON.parse(w.IPC.written[0])
+  const first = readWritten(w.IPC, 0)
   expect(first.t).toBe('init')
   expect(first.deviceName).toBe('Pixel Test')
   expect(first.storageDir).toMatch(/pear-wallpaper/)
@@ -41,18 +62,21 @@ test('first frame is init with storageDir + deviceName; singleton thereafter', (
 })
 
 test('storageDir has no leftover file:// scheme from the Paths.document URI', () => {
+  const { getBridge, __instances } = load()
+  getBridge()
   const w = __instances[0]
-  const first = JSON.parse(w.IPC.written[0])
+  const first = readWritten(w.IPC, 0)
   expect(first.storageDir).not.toMatch(/file:/)
   expect(first.storageDir).toBe('/data/user/0/com.pearwallpaper.app/files/pear-wallpaper')
 })
 
 test('a terminal error (arriving before ready, i.e. a failed init) clears the singleton so the next getBridge() starts a fresh worklet', () => {
+  const { getBridge, __instances } = load()
   const bridge = getBridge()
-  const w = __instances[__instances.length - 1]
+  const w = __instances[0]
   // Simulate the host's init-failure frame (worklet/host.js) arriving over
   // the wire before any 'ready' evt for this instance.
-  w.IPC.emit('data', Buffer.from(JSON.stringify({ t: 'evt', event: 'error', payload: { message: 'boom' } }) + '\n'))
+  sendFrame(w.IPC, { t: 'evt', event: 'error', payload: { message: 'boom' } })
 
   const nextBridge = getBridge()
   expect(nextBridge).not.toBe(bridge)
@@ -60,11 +84,78 @@ test('a terminal error (arriving before ready, i.e. a failed init) clears the si
 })
 
 test('an error arriving after ready is a normal operational error, not terminal — singleton survives', () => {
+  const { getBridge, __instances } = load()
   const bridge = getBridge()
-  const w = __instances[__instances.length - 1]
-  w.IPC.emit('data', Buffer.from(JSON.stringify({ t: 'evt', event: 'ready', payload: {} }) + '\n'))
-  w.IPC.emit('data', Buffer.from(JSON.stringify({ t: 'evt', event: 'error', payload: { message: 'auto-resume join failed' } }) + '\n'))
+  const w = __instances[0]
+  sendFrame(w.IPC, { t: 'evt', event: 'ready', payload: {} })
+  sendFrame(w.IPC, { t: 'evt', event: 'error', payload: { message: 'auto-resume join failed' } })
 
   expect(getBridge()).toBe(bridge)
+  expect(__instances).toHaveLength(1)
+})
+
+// --- post-Task-6 ruled fix: readiness gate on bridge.call() -----------
+//
+// worklet/host.js only wires bridge-main's 'req' handler after core.ready()
+// resolves; the newline-JSON transport has no queueing. A bridge.call()
+// sent before the host's 'ready' evt used to go straight onto the wire and
+// be silently dropped, leaving its promise unsettled forever (the cold-
+// start getState drop diagnosed during Task 6). These three tests cover
+// the fix: queue-then-replay, pass-through-after-ready, and reject-queued-
+// calls-on-terminal-error.
+
+test('a call made before ready does not hit the transport until ready fires, then resolves with the real response', async () => {
+  const { getBridge, __instances } = load()
+  const bridge = getBridge()
+  const w = __instances[0]
+  const writtenBeforeCall = w.IPC.written.length // just the init frame so far
+
+  const callPromise = bridge.call('getState')
+
+  // Not on the wire yet — the host isn't listening for 'req' frames
+  // before 'ready', so sending now would be silently dropped.
+  expect(w.IPC.written).toHaveLength(writtenBeforeCall)
+
+  sendFrame(w.IPC, { t: 'evt', event: 'ready', payload: {} })
+
+  // 'ready' replays the queued call as a real req frame.
+  expect(w.IPC.written).toHaveLength(writtenBeforeCall + 1)
+  const req = readWritten(w.IPC, writtenBeforeCall)
+  expect(req.t).toBe('req')
+  expect(req.cmd).toBe('getState')
+
+  sendFrame(w.IPC, { t: 'res', id: req.id, ok: true, value: { groupStatus: 'member' } })
+
+  await expect(callPromise).resolves.toEqual({ groupStatus: 'member' })
+})
+
+test('calls made after ready pass through immediately, with no queueing', async () => {
+  const { getBridge, __instances } = load()
+  const bridge = getBridge()
+  const w = __instances[0]
+  sendFrame(w.IPC, { t: 'evt', event: 'ready', payload: {} })
+
+  const writtenBeforeCall = w.IPC.written.length
+  const callPromise = bridge.call('syncNow')
+
+  expect(w.IPC.written).toHaveLength(writtenBeforeCall + 1)
+  const req = readWritten(w.IPC, writtenBeforeCall)
+  expect(req.cmd).toBe('syncNow')
+
+  sendFrame(w.IPC, { t: 'res', id: req.id, ok: true, value: null })
+
+  await expect(callPromise).resolves.toBeNull()
+})
+
+test('a terminal error before ready rejects any queued call and still clears the singleton', async () => {
+  const { getBridge, __instances } = load()
+  const bridge = getBridge()
+  const w = __instances[0]
+
+  const callPromise = bridge.call('getState')
+  sendFrame(w.IPC, { t: 'evt', event: 'error', payload: { message: 'init failed: boom' } })
+
+  await expect(callPromise).rejects.toThrow('init failed: boom')
+  expect(getBridge()).not.toBe(bridge)
   expect(__instances).toHaveLength(2)
 })

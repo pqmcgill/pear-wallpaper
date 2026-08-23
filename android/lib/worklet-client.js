@@ -21,7 +21,43 @@ export function getBridge () {
   worklet.start('/worklet.bundle', bundle)
 
   const transport = createDuplexJsonTransport(worklet.IPC)
-  const bridge = createBridgeUi(transport)
+  const realBridge = createBridgeUi(transport)
+
+  // Readiness gate (post-Task-6 fix — diagnosed while building Task 6,
+  // applies here since worklet-client.js is where init/readiness ordering
+  // is owned). worklet/host.js only wires bridge-main's 'req' handler
+  // AFTER core.ready() resolves, and the newline-JSON transport does no
+  // queueing of its own — a bridge.call() sent before the host's 'ready'
+  // evt is silently dropped on the wire (nothing on the other end is
+  // listening for 'req' frames yet), and its promise never settles.
+  // _layout.js's mount-time `bridge.call('getState')` can race exactly
+  // this on a resumed member device with a slow swarm bootstrap, stranding
+  // the UI on Onboarding despite real membership. Below, `bridge.call()`
+  // queues while `!ready` and replays every queued call once 'ready'
+  // fires — the Task 3 host contract guarantees 'ready' is emitted only
+  // once bridge-main is wired, so replaying then is always safe. Calls
+  // made after 'ready' pass straight through with no added latency.
+  // `on()` is an untouched passthrough — events still come straight off
+  // the real bridge, only `call()` is gated.
+  let ready = false
+  const pending = []
+  const bridge = {
+    call (cmd, ...args) {
+      if (ready) return realBridge.call(cmd, ...args)
+      return new Promise((resolve, reject) => { pending.push({ cmd, args, resolve, reject }) })
+    },
+    on (event, cb) { return realBridge.on(event, cb) }
+  }
+
+  realBridge.on('ready', () => {
+    ready = true
+    // Replay in arrival order; each call's own request/response id
+    // round-trip through the real bridge from here, same as any call made
+    // after ready.
+    for (const { cmd, args, resolve, reject } of pending.splice(0)) {
+      realBridge.call(cmd, ...args).then(resolve, reject)
+    }
+  })
 
   // Terminal-error contract (worklet/host.js): a failed init frame makes the
   // Bare process exit(1) — 'ready' never fires for that instance and a
@@ -30,8 +66,6 @@ export function getBridge () {
   // bridge-main (engine failures, auto-resume-join failures, etc.) and do
   // NOT mean the process died, so the singleton must survive those — only
   // clear it for an error that arrives before 'ready' ever did.
-  let ready = false
-  bridge.on('ready', () => { ready = true })
   // No in-app retry is wired to this — deliberately. storageDir/deviceName
   // are static for the process lifetime, so a fresh Worklet started with
   // the same inputs would fail identically; the only real recovery is
@@ -39,10 +73,20 @@ export function getBridge () {
   // the terminal error surfaces via lastError. Clearing the singleton here
   // just means the NEXT cold getBridge() call — a later screen mounting,
   // Task 9's background path, or a restarted app — starts clean instead of
-  // handing back a bridge wired to a dead Worklet.
-  bridge.on('error', () => { if (!ready) instance = null })
+  // handing back a bridge wired to a dead Worklet. Any call still queued
+  // at this point never had a live 'req' handler to answer it, so it's
+  // rejected here rather than left to hang forever.
+  realBridge.on('error', (payload) => {
+    if (ready) return
+    instance = null
+    const err = new Error((payload && payload.message) || 'worklet failed to start')
+    for (const { reject } of pending.splice(0)) reject(err)
+  })
 
-  // init MUST precede any bridge.call (host ignores bridge frames pre-init)
+  // init MUST precede any bridge.call (host ignores bridge frames
+  // pre-init) — and now that bridge.call() itself queues until 'ready',
+  // readiness ordering is guaranteed the same way init ordering already
+  // was: nothing reaches the wire before the host is listening for it.
   transport.send({
     t: 'init',
     storageDir: `${documentsPath()}/pear-wallpaper`,

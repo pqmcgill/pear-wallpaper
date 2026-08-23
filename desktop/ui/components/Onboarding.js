@@ -15,8 +15,18 @@ const JOIN_ERROR_MESSAGES = {
   closed: 'The connection closed before joining finished.'
 }
 
-function friendlyJoinError (message) {
-  return JOIN_ERROR_MESSAGES[message] || 'Could not join. Ask for a fresh invite.'
+// blind-pairing-core's coded errors format Error#message as `${code}:
+// ${msg}` (e.g. 'PAIRING_REJECTED: Pairing was rejected'), not the bare
+// code, and bridge-main/bridge-ui only relay `.message` across the wire,
+// dropping `.code` — so an exact-match lookup on `message` never hit
+// PAIRING_REJECTED/INVITE_USED/INVITE_EXPIRED; every rejection silently fell
+// through to the generic fallback. Matching by prefix fixes it for the coded
+// cases while still exact-matching the plain 'superseded by a newer
+// invite'/'closed' messages (a full-string match is also a valid prefix
+// match). Mirrors android/components/Onboarding.js's friendlyJoinError.
+export function friendlyJoinError (message) {
+  const code = message && Object.keys(JOIN_ERROR_MESSAGES).find((c) => message.startsWith(c))
+  return (code && JOIN_ERROR_MESSAGES[code]) || 'Could not join. Ask for a fresh invite.'
 }
 
 export function Onboarding ({ bridge }) {

@@ -24,3 +24,9 @@ test('dismiss-error clears lastError but leaves the rest of the snapshot alone',
   const s = reduce(withError, { type: 'dismiss-error' })
   expect(s.lastError).toBeNull()
 })
+
+test('join-error sets joinError only — lastError is untouched (no ErrorBanner regression)', () => {
+  const s = reduce(initialSnapshot, { type: 'join-error', payload: { message: 'PAIRING_REJECTED: Pairing was rejected' } })
+  expect(s.joinError).toBe('PAIRING_REJECTED: Pairing was rejected')
+  expect(s.lastError).toBeNull()
+})

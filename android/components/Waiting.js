@@ -9,14 +9,19 @@ import { View, Text, StyleSheet } from 'react-native'
 // in flight — so bridge-main pushes a 'state' evt with groupStatus
 // 'joining' well before a LIVE joinGroup() call settles, and this screen
 // (not Onboarding) is what's mounted when the rejection lands. Onboarding
-// forwards it into snapshot.joinError for exactly that reason (see its
-// attemptJoin). So this map's codes now arrive from both paths. Mirrors
+// forwards it into snapshot.joinError (via the 'join-error' store action)
+// for exactly that reason — see its attemptJoin. So this map now needs
+// the full joinGroup() rejection taxonomy, not just the resumed-join
+// subset: kept identical to Onboarding's JOIN_ERROR_MESSAGES (review
+// caught the drift when only 3 of 5 codes were listed here). Mirrors
 // desktop/ui/components/Waiting.js (which has the same latent gap — not
 // fixed there in this task).
 const MESSAGES = {
   PAIRING_REJECTED: 'The creator denied this device.',
   INVITE_USED: 'That invite was already used. Ask for a fresh one.',
-  INVITE_EXPIRED: 'That invite expired. Ask for a fresh one.'
+  INVITE_EXPIRED: 'That invite expired. Ask for a fresh one.',
+  'superseded by a newer invite': 'That join attempt was replaced by a newer one.',
+  closed: 'The connection closed before joining finished.'
 }
 
 // blind-pairing-core's coded errors format Error#message as `${code}:

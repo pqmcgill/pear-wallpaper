@@ -57,9 +57,13 @@ export function Onboarding ({ bridge, dispatch }) {
   // which reaches here as a 'state' push with groupStatus 'joining' well
   // before this promise settles — routing away to Waiting and unmounting
   // this component. So the rejection is ALSO dispatched into shared
-  // snapshot state (the raw code, matching Waiting's own MESSAGES map) —
-  // the only way a live deny/INVITE_USED/INVITE_EXPIRED is visible once
-  // Waiting has replaced this screen.
+  // snapshot.joinError (the raw code, matching Waiting's own MESSAGES
+  // map) — the only way a live deny/INVITE_USED/INVITE_EXPIRED is visible
+  // once Waiting has replaced this screen. Uses the dedicated
+  // 'join-error' action, NOT 'error' — 'error' also sets lastError,
+  // which would pop a redundant, unfriendly ErrorBanner on top of this
+  // component's own already-friendly copy in the garbage-invite case
+  // (review-caught regression).
   const attemptJoin = async (value) => {
     setJoinError(null)
     setJoining(true)
@@ -67,7 +71,7 @@ export function Onboarding ({ bridge, dispatch }) {
       await bridge.call('joinGroup', value)
     } catch (err) {
       setJoinError(friendlyJoinError(err.message))
-      dispatch?.({ type: 'error', payload: { message: err.message } })
+      dispatch?.({ type: 'join-error', payload: { message: err.message } })
     } finally {
       setJoining(false)
     }

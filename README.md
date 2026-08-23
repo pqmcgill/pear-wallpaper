@@ -1,15 +1,24 @@
 # pear-wallpaper
 
-Send wallpapers to your own devices, peer-to-peer. No server, no
-accounts, no cloud — a private group of your devices (Mac, Android)
-that replicate over the [Holepunch](https://holepunch.to) stack and
-set each other's wallpapers.
+Send wallpapers to your family's devices, peer-to-peer. No server, no
+accounts, no cloud — just a private little swarm of devices (Mac,
+Android) that replicate over the [Holepunch](https://holepunch.to)
+stack and set each other's wallpapers.
 
-Share a photo from your phone's gallery, pick a device, and it becomes
-that machine's wallpaper — even if the target is asleep at the time:
-delivery is queued in the group's replicated log and applied on the
-target's next sync. Built as a learning project for the
-Hypercore/Pear ecosystem; the docs and journal deliberately show their
+This exists because I wanted a fun way for my family to surprise each
+other with pictures — your kid's drawing shows up as Dad's desktop, a
+vacation photo lands on Mom's lock screen. And I wanted it done right:
+end-to-end between our own devices, invite-only, with nothing passing
+through (or sitting on) anyone's server. Nobody's photos should live
+in a stranger's datacenter just to travel across the living room.
+
+Share a photo from your phone's gallery, pick a person, and it becomes
+their wallpaper — even if their device is asleep at the time: delivery
+is queued in the group's replicated log and applied on the next sync.
+There's a second motive here too: I've been fascinated by peer-to-peer
+applications for a while, and this was the excuse to finally build one
+properly — a small, real problem to drive a deep dive into the
+Hypercore/Pear ecosystem. The docs and journal deliberately show their
 work.
 
 ## How it works

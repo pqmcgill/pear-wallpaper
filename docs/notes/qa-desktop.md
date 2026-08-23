@@ -49,20 +49,24 @@ Electron apps honor the Chromium `--user-data-dir` switch before
 `app.whenReady()` — no code change needed, and this app's
 `app.requestSingleInstanceLock()` scopes its lock per user-data dir, so two
 instances with different `--user-data-dir` values run independently side by
-side (this has not been independently smoke-verified in this task; verify it
-as part of Act 2). Two ways to get two instances:
+side (smoke-verified 2026-08-21: two instances stayed up side by side with
+separate `corestore`/`device-name.txt` under each dir, and a third launch
+reusing an in-use dir exited immediately via the single-instance lock). Two
+ways to get two instances:
 
 **A. Dev harness, two terminals** (fastest, good for Acts 1–9):
 ```bash
 cd /Users/patrick/code/pear-wallpaper/desktop
-npm run dev -- --user-data-dir=/tmp/pw-qa-a   # "device A"
+npm run dev -- -- --user-data-dir=/tmp/pw-qa-a   # "device A"
 # second terminal
-npm run dev -- --user-data-dir=/tmp/pw-qa-b   # "device B"
+npm run dev -- -- --user-data-dir=/tmp/pw-qa-b   # "device B"
 ```
-(`npm run dev` is `electron-forge start`; args after the first `--` go to
-`electron-forge start`'s own `--`, which forwards to the launched Electron
-process argv — confirm your installed `@electron-forge/cli` version still
-forwards this way if it doesn't work as written.)
+The double `--` is required: npm consumes the first (separating npm's own
+options from the script's args), so only what follows it reaches
+`electron-forge start`, which in turn needs its own `--` before args it
+should forward verbatim to the launched Electron process. With a single
+`--`, forge sees `--user-data-dir` itself and dies with
+`error: unknown option` (verified against @electron-forge/cli 7.x).
 
 **B. Built `.app`, two copies** (required for Acts 10–11):
 ```bash

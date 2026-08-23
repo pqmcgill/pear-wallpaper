@@ -96,9 +96,13 @@ apps honor it automatically before `app.whenReady()`; no code change
 needed, and this app's single-instance lock is scoped per `userData` dir):
 
 ```bash
-npm run dev -- --user-data-dir=/tmp/pw-a    # "device A"
-npm run dev -- --user-data-dir=/tmp/pw-b    # "device B", separate terminal
+npm run dev -- -- --user-data-dir=/tmp/pw-a    # "device A"
+npm run dev -- -- --user-data-dir=/tmp/pw-b    # "device B", separate terminal
 ```
+
+(Double `--` required: npm consumes the first, and `electron-forge start`
+needs its own `--` before args it forwards to the Electron process — with
+one `--` forge dies on `unknown option`. Details in `docs/notes/qa-desktop.md`.)
 
 Launch-at-login and OTA only exercise meaningfully against a **built**
 `.app` (see `npm run make` above) — the LaunchAgent points at

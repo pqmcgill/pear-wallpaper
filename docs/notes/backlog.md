@@ -71,6 +71,13 @@ each section.
   Onboarding create flow, desktop DeviceList). Today it's
   select-and-copy by hand — fiddly on Android especially.
 
+- **Custom app icon.** The Android app still ships the bare-expo
+  template's default icon. Needs real icon art, wired via app.json's
+  `icon`/`android.adaptiveIcon` (foreground + background layers for
+  Android's adaptive icons) — an `expo prebuild --clean` + rebuild
+  picks it up. Desktop's tray icon (`trayTemplate.png`) and eventual
+  `.app` icon could share the same artwork.
+
 ## UX polish
 
 - **Make the app beautiful on all screen sizes.** Both shells are

@@ -250,3 +250,30 @@
   such fluke, and Bare has no built-in 'events'. Desktop: 35/35 tests,
   85/85 asserts (down from 53/53 — the four moved suites now run in
   `bridge/`: 20/20 tests, 47/47 asserts there).
+- 2026-08-23 Android-shell Task 2: scaffolded `android/` from holepunchto/
+  bare-expo (Expo SDK 55, RN 0.83.6, react-native-bare-kit 0.15.0 pinned
+  exact); the template's own `app/index.tsx` was already the one-screen
+  worklet echo this plan needs, converted to `.js`. Two real Gradle/AGP
+  bugs blocked the Step 4 emulator boot, both root-caused and fixed
+  persistently rather than worked around locally: (1)
+  `foojay-resolver-convention@0.5.0`, pinned inside
+  `@react-native/gradle-plugin`'s included build, throws `NoSuchFieldError`
+  against Gradle 9.0.0 — fixed via a `patch-package` patch bumping it to
+  1.0.0; (2) AGP 9.5.0-alpha02's prefab/CMake step misclassifies JDK 25's
+  JEP 472 "restricted native access" warning banner as a fatal build
+  error (root-caused via `javap` on the AGP jar) — no JVM-flag workaround
+  exists (every flag-injection mechanism prints its own banner that trips
+  the same bug) and no second JDK exists on this machine, so fixed via
+  Gradle 9's Daemon JVM criteria feature (auto-provisioned JDK 21), wired
+  to survive CNG regeneration through a new local Expo config plugin
+  (`android/plugins/withGradleJvmFix.js`). Full findings in
+  `docs/notes/api-divergences.md`. Verified end-to-end from a from-scratch
+  `expo prebuild` + `expo run:android`: `BUILD SUCCESSFUL`, echo screen
+  shows "Hello from Bare!" on the emulator, worklet-side `console.log`
+  visible in logcat (under the app's own package tag, not literally `bare`
+  — also a recorded divergence). `metro.config.js` watches `../bridge` and
+  `../core` for Tasks 3-4. Jest: `jest-expo` + `@testing-library/react-native`
+  14.0.1 (whose `render()` is async, unlike the brief's sync sketch — test
+  awaits it); `test/smoke.test.js` mocks `react-native-bare-kit` and
+  renders the echo screen without the native module. `npm run test:ui`:
+  1/1 tests, pristine.

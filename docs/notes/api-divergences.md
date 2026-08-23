@@ -378,3 +378,102 @@ nobody calls `approve()`/`deny()`) makes `core.close()` hang forever.
   removing the dedupe reproduces the `ENOENT` crash deterministically on
   every run of the affected test; with it, the full suite (27/27) is green
   on repeated runs.
+
+## Task 2 (android-shell): bare-expo template needed two real Gradle/AGP
+fixes to boot on the emulator; two smaller sketch divergences
+
+The brief's Step 4 go/no-go gate (`npx expo run:android`) failed twice on
+first boot, on this environment's Android Studio JBR (JDK 25) paired with
+the Gradle/AGP versions this Expo SDK 55 / RN 0.83.6 release resolves.
+Both are genuine upstream compatibility bugs, not something wrong with the
+scaffold itself — recorded here in full since they gate the whole plan.
+
+- **Bug 1 — `foojay-resolver-convention@0.5.0` (pinned inside
+  `node_modules/@react-native/gradle-plugin/settings.gradle.kts`, an
+  included composite build) throws `NoSuchFieldError` against Gradle
+  9.0.0** (the version this template's own CNG pins in
+  `android/gradle/wrapper/gradle-wrapper.properties`):
+  `Class org.gradle.jvm.toolchain.JvmVendorSpec does not have member field
+  'IBM_SEMERU'` inside `org.gradle.toolchains.foojay.DistributionsKt.<clinit>`.
+  Gradle 9 removed a field that plugin's 0.5.0 release (current in 2023,
+  long predating Gradle 9's mid-2025 GA) was compiled against. Confirmed
+  by checking Maven metadata for the plugin's Gradle Plugin Portal
+  coordinates — releases up to 1.0.0 exist, all newer than what
+  react-native@0.83.6 ships.
+  **Resolution:** `patches/@react-native+gradle-plugin+0.83.6.patch`
+  (via `patch-package`, `postinstall` script added to `package.json`)
+  bumps that one version string to `1.0.0`. Verified the patch reapplies
+  automatically on a clean `npm install` (postinstall ran, `settings.gradle.kts`
+  came back patched).
+- **Bug 2 — AGP 9.5.0-alpha02 (the version this project's Expo/RN version
+  catalog resolves to pair with Gradle 9.0.0; confirmed no matching stable
+  AGP release exists — AGP 9.3.1, the latest stable, hard-requires Gradle
+  >= 9.5.0, so downgrading AGP without also bumping the Gradle wrapper
+  isn't a real option) misclassifies a JDK startup banner as a fatal
+  prefab/CMake build error.** `expo-modules-core` and `react-native-screens`
+  both fail at `:<module>:configureCMakeDebug[arm64-v8a]` with
+  `IllegalStateException: WARNING: A restricted method in java.lang.System
+  has been called`. Root-caused by disassembling
+  `com.android.build.gradle.tasks.GeneratePrefabPackagesKt` (via `javap`
+  on the cached AGP jar): its `reportErrors`/`errorMatchers` logic reads
+  the prefab subprocess's captured stderr file line-by-line, and any line
+  that doesn't match one of a handful of known prefab-specific regexes
+  (and isn't blank) is unconditionally treated as an `OtherError` and
+  thrown as fatal. The JBR bundled with Android Studio (JDK 25, mandated
+  as `JAVA_HOME` for this task) runs the prefab subprocess (same JVM,
+  since AGP resolves it via `Jvm.current()`) and JDK 25 prints JEP 472's
+  "restricted native access" warning on that subprocess's first native
+  call — an unrecognized, unmatched line that AGP's parser fatals on.
+  **A pure JVM-flag fix is a dead end:** every mechanism for silencing the
+  warning (`JDK_JAVA_OPTIONS`, `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS`) itself
+  unconditionally prints a `NOTE: Picked up ...` banner to the same
+  stderr stream, which trips the identical `OtherError` fallthrough —
+  confirmed empirically (swapped one fatal line for the other, build still
+  failed the same way). There is also no second JDK anywhere on this
+  machine to fall back to (checked `/Library/Java/JavaVirtualMachines`,
+  `~/.jdks`, Homebrew, `/usr/libexec/java_home`) — the JBR is the only
+  runtime installed.
+  **Resolution:** used Gradle 9's Daemon JVM criteria feature
+  (`./gradlew updateDaemonJvm --jvm-version=21 --jvm-vendor=adoptium`) to
+  make the Gradle *daemon itself* — not just JAVA_HOME's client launcher —
+  run under an auto-provisioned JDK 21, which predates JEP 472 and never
+  emits the warning. This needs a toolchain-download resolver configured
+  at the *root* project (the included builds' own resolvers don't count;
+  `updateDaemonJvm` first failed with "Toolchain download repositories
+  have not been configured" until the root `settings.gradle` also got the
+  foojay plugin). Both `android/settings.gradle` (adds
+  `org.gradle.toolchains.foojay-resolver-convention` v1.0.0 — same fixed
+  version as Bug 1) and `android/gradle/gradle-daemon-jvm.properties`
+  (requesting JDK 21/Adoptium, with the foojay redirect URLs baked in
+  exactly as `updateDaemonJvm` generated them) are CNG-regenerated,
+  gitignored output, so a fresh `expo prebuild`/`expo run:android` would
+  silently lose this fix on a clean clone. Wrote a small local Expo config
+  plugin, `android/plugins/withGradleJvmFix.js` (registered in
+  `app.json`'s `plugins`), that re-applies both on every prebuild via
+  `withSettingsGradle` and `withDangerousMod('android', ...)`. Verified by
+  deleting `android/android` + `android/ios` + `android/.expo` entirely,
+  re-running `npx expo prebuild --platform android`, confirming both files
+  came back correct without any manual step, then running a full
+  `npx expo run:android` from that clean state end to end: `BUILD
+  SUCCESSFUL`, echo screen rendered on the emulator, worklet console
+  output visible in logcat.
+- **Sketch divergence — `adb logcat -s bare` doesn't show the worklet's
+  `console.log` output.** The brief's Step 4 verification named tag `bare`
+  verbatim. On this react-native-bare-kit@0.15.0 build, the worklet's
+  `console.log('Hello from React Native!')` actually surfaces in logcat
+  under the app's own (truncated) package tag —
+  `I/arwallpaper.app: Hello from React Native!` (from
+  `com.pearwallpaper.app`, Android truncates long tags) — not under a tag
+  literally named `bare`. Confirmed no logcat line anywhere is tagged
+  exactly `bare` (`adb logcat -v tag | grep -i bare` — no hits beyond the
+  package-tag one). Verification for this and future tasks should grep
+  full logcat (or filter on the app's own package/PID) for the expected
+  worklet output rather than `-s bare`.
+- **Sketch divergence — `@testing-library/react-native@14.0.1`'s `render()`
+  is `async`, not sync.** The brief's Step 5 sketch
+  (`const { toJSON } = render(<Screen />)`) matches older
+  testing-library versions; 14.x's `render` returns a `Promise` (it now
+  awaits React's `act()` internally), so destructuring `toJSON` off the
+  unresolved promise threw `TypeError: toJSON is not a function`.
+  `test/smoke.test.js`'s test is `async` and does
+  `const { toJSON } = await render(<Screen />)`.

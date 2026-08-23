@@ -1,3 +1,9 @@
 node_modules/
 reference/
 core/test/sandbox/
+
+# Android shell: Expo CNG-generated native projects and build output.
+android/app/gen/
+android/android/
+android/ios/
+android/.expo/

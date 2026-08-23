@@ -54,6 +54,18 @@ each section.
   story needs a rethink (e.g. save to Photos + shortcut/manual step),
   plus background execution is stricter than Android's.
 
+- **Editable display names.** Members can change their display name,
+  including setting it at join time (join screen offers a name field
+  pre-filled with the device name as the suggested default — the
+  plumbing half-exists: both shells already derive a `deviceName` at
+  init, Android from `expo-device`'s model name, desktop from
+  `resolveDeviceName`). Needs: a rename op in core (roster is
+  currently written only by the creator's `add-device` — rename by
+  the member themselves needs its own op + apply rule), a
+  name-at-join path (candidate proposes the name during pairing —
+  partially exists in the pairing flow), and edit affordances in both
+  shells' Settings.
+
 - **Copy-to-clipboard for invite codes.** One-tap/one-click copy of
   the invite string wherever it's displayed (Android DeviceList +
   Onboarding create flow, desktop DeviceList). Today it's

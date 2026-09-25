@@ -14,7 +14,17 @@ import { deleteStagedFile } from '../lib/share-target'
 // exported function is what test/send-screen.test.js renders directly
 // (bridge/snapshot/filePath/onSent as plain props), same convention as
 // every other components/*.js test in this app.
-export function SendScreen ({ bridge, snapshot, filePath, onSent }) {
+// Best-effort: a failure to remove the staged file must never block a send
+// or a cancel (stageSharedImage's own reap-on-next-share is the backstop).
+function discardStaged (filePath) {
+  try {
+    deleteStagedFile(filePath)
+  } catch (err) {
+    console.warn('pear-wallpaper: failed to delete staged file', err)
+  }
+}
+
+export function SendScreen ({ bridge, snapshot, filePath, onSent, onCancel }) {
   const [targets, setTargets] = useState({})
   const [sendError, setSendError] = useState(null)
   const [sending, setSending] = useState(false)
@@ -26,16 +36,8 @@ export function SendScreen ({ bridge, snapshot, filePath, onSent }) {
     setSending(true)
     try {
       await bridge.call('sendWallpaper', { filePath, targets: chosen })
-      try {
-        // Best-effort: sendWallpaper already succeeded and core has its own
-        // copy of the image in hyperblobs by this point, so a failure to
-        // remove the now-redundant staged file must never surface as a send
-        // failure (stageSharedImage's own reap-on-next-share is the
-        // backstop if this does fail).
-        deleteStagedFile(filePath)
-      } catch (err) {
-        console.warn('pear-wallpaper: failed to delete staged file after send', err)
-      }
+      // core has its own copy of the image in hyperblobs by now.
+      discardStaged(filePath)
       onSent?.()
     } catch (err) {
       setSendError(err.message)
@@ -44,9 +46,23 @@ export function SendScreen ({ bridge, snapshot, filePath, onSent }) {
     }
   }
 
+  const cancel = () => {
+    discardStaged(filePath)
+    onCancel?.()
+  }
+
+  const disabled = !filePath || chosen.length === 0 || sending
+
   return (
     <View style={styles.section}>
       {filePath && <Image source={{ uri: 'file://' + filePath }} style={styles.preview} />}
+      {targetable.length === 0 && (
+        <Text style={styles.empty}>
+          {snapshot.groupStatus === 'member'
+            ? 'No other devices in your group yet. Invite one from Devices, then share the picture again.'
+            : 'Join a group first, then share the picture again.'}
+        </Text>
+      )}
       {targetable.map((d) => (
         <View style={styles.row} key={d.key}>
           <Text style={styles.rowLabel}>{d.name}</Text>
@@ -56,9 +72,14 @@ export function SendScreen ({ bridge, snapshot, filePath, onSent }) {
           />
         </View>
       ))}
-      <Pressable onPress={send} disabled={!filePath || chosen.length === 0 || sending}>
-        <Text>{sending ? 'Sending…' : 'Send'}</Text>
-      </Pressable>
+      <View style={styles.actions}>
+        <Pressable onPress={cancel} disabled={sending}>
+          <Text style={styles.action}>Cancel</Text>
+        </Pressable>
+        <Pressable onPress={send} disabled={disabled}>
+          <Text style={[styles.action, disabled && styles.disabled]}>{sending ? 'Sending…' : 'Send'}</Text>
+        </Pressable>
+      </View>
       {sendError && <Text style={styles.error}>{sendError}</Text>}
     </View>
   )
@@ -82,6 +103,7 @@ export default function Send () {
       snapshot={snapshot}
       filePath={filePath}
       onSent={() => router.replace('/')}
+      onCancel={() => router.replace('/')}
     />
   )
 }
@@ -91,5 +113,9 @@ const styles = StyleSheet.create({
   preview: { width: '100%', height: 200, marginBottom: 24, resizeMode: 'contain' },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
   rowLabel: { flex: 1 },
+  empty: { marginBottom: 24 },
+  actions: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 12 },
+  action: { fontSize: 16 },
+  disabled: { opacity: 0.4 },
   error: { marginTop: 12, color: 'crimson' }
 })

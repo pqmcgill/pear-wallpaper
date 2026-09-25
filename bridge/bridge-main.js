@@ -50,7 +50,7 @@ function createBridgeMain ({ core, transport, engine = null, platform = null, lo
     approve: (key) => core.approve(key),
     deny: (key) => core.deny(key),
     removeDevice: (key) => core.removeDevice(key),
-    sendWallpaper: ({ filePath, targets }) => core.sendWallpaper(filePath, targets),
+    sendWallpaper: ({ filePath, targets, filename }) => core.sendWallpaper(filePath, targets, { filename }),
     // Shared across every shell: Android's RN apply path polls
     // pendingWallpaper and acks with markApplied directly over the bridge
     // (spec §3.2 — there is no sync-engine on that side of the wire).

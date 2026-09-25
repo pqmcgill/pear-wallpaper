@@ -87,6 +87,9 @@ await core.ready()
     a *later* `joinGroup(otherInvite)` call on the same instance
     before it resolved.
   - **`'closed'`** — `close()` ran while this join was still pending.
+    Not a failure: the persisted pending invite is kept, and the next
+    `ready()` resumes the join, so a quit while waiting for approval
+    picks up where it left off.
 
 - **`core.on('pairing-request', ({ candidateKey, name }) => …)`**
   Fires on the creator's device when a candidate redeems a live

@@ -52,7 +52,8 @@ All actions go through the real renderer: real mouse events at element centers, 
 | `$P wait <inst> "<text>" [sec]` | Polls `document.body.innerText` until the text appears (default 90 s). On timeout it prints the screen. |
 | `$P text <inst>` | Prints the current screen text. |
 | `$P state <inst>` | Prints the worker's `getState` snapshot. **Observation only.** |
-| `$P eval <inst> "<js>"` | Evaluates JS in the renderer. Use it to read values, such as the invite: `$P eval a "document.querySelector('.invite-block code').innerText"`. |
+| `$P read <inst> "<css>" [sec]` | Waits for the selector to render (default 30 s) and prints its text. Use it for values that appear only after a worker round trip, such as the invite: `INV=$($P read a ".invite-block code")`. |
+| `$P eval <inst> "<js>"` | Evaluates JS in the renderer and prints the JSON result. Use it for one-off reads that are already on screen. |
 | `$P fixture <label>` | Writes a PNG with a unique solid color to `artifacts/<label>.png` to use as a send payload. |
 | `$P hash <files…>` | Prints the sha256 of each file, to match the sent file against what landed. |
 | `$P wallpaper [--save <label>]` | Prints the Mac's current desktop picture path. `--save` copies it into artifacts. |

@@ -265,6 +265,21 @@ const commands = {
     die(`timed out after ${timeoutSec}s waiting for "${text}" on ${name}. Screen:\n${final}`)
   },
 
+  // Waits for a CSS selector to render and prints its text (e.g. the invite,
+  // which appears only after createInvite round-trips the worker).
+  async read (name, selector, timeoutSec = '30') {
+    if (!selector) die('usage: pw read <name> "<css selector>" [timeoutSec]')
+    const c = await connect(name)
+    const deadline = Date.now() + Number(timeoutSec) * 1000
+    while (Date.now() < deadline) {
+      const text = await c.evaluate(`document.querySelector(${JSON.stringify(selector)})?.innerText ?? null`)
+      if (text) { c.close(); console.log(text); return }
+      await sleep(300)
+    }
+    c.close()
+    die(`timed out after ${timeoutSec}s waiting for ${selector} on ${name}`)
+  },
+
   // Observation only: reads the worker's snapshot. Never use bridge calls to
   // perform the action under test.
   async state (name) {
@@ -376,7 +391,7 @@ async function stopInst (inst) {
 
 const [cmd, ...args] = process.argv.slice(2)
 if (!commands[cmd]) {
-  console.log('usage: pw <start-run|launch|doctor|text|click|fill|file|wait|state|shot|eval|wallpaper|fixture|hash|stop|cleanup> ...')
+  console.log('usage: pw <start-run|launch|doctor|text|click|fill|file|wait|read|state|shot|eval|wallpaper|fixture|hash|stop|cleanup> ...')
   process.exit(cmd ? 1 : 0)
 }
 commands[cmd](...args).catch((err) => die(err.stack || err.message))

@@ -25,5 +25,6 @@ Preconditions:
 
 ## Gotchas
 
-- The invite that Onboarding renders under `Create a group` is never visible. The worker's `state` push routes to MainView as soon as `createGroup` resolves, which unmounts Onboarding before `createInvite` returns. `docs/notes/qa-desktop.md` Act 2 still says the invite appears inline. That's wrong: get the invite from Devices → `Create invite` (see [pairing](./pairing.md)). Observed 2026-09-25.
-- The self row's online dot is `off` (`online: false` for self in `getState`). That's cosmetic, not a failed check.
+- The invite that Onboarding renders under `Create a group` is never visible. The worker's `state` push routes to MainView as soon as `createGroup` resolves, which unmounts Onboarding before `createInvite` returns. `docs/notes/qa-desktop.md` Act 2 still says the invite appears inline. That's wrong: get the invite from Devices → `Create invite` (see [pairing](./pairing.md)). Tracked as issue #20.
+- `getState` reports `online: false` for self, and the online dot renders at zero width on every row, so online status can't be seen on screen (issue #15). Neither is a failed check.
+- Verified live on 2026-09-25 (maintenance pass): onboarding render, create, and a roster of 1 with `isCreator: true`.

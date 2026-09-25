@@ -25,6 +25,7 @@ This directory is the maintained source for verifying the user-facing behavior o
 - Capture the screen before and after the action with `pw shot`. Each shot writes a PNG and the screen text.
 - For a mutation, check a second view: the other device's screen, `pw state`, or the OS (the desktop picture, files under the userdata directory).
 - A wallpaper proof matches the fixture's sha256 against `pw wallpaper --save`.
+- When the app's real behavior is a known product bug, the feature file says what actually happens and links the GitHub issue (`pqmcgill/pear-wallpaper`). Don't write the recipe as if the bug were fixed.
 - Report any entry point you could not reach (tray menu, native file dialog, drag-and-drop, built `.app`) as unverified, with the reason.
 
 ## Feature entry contract

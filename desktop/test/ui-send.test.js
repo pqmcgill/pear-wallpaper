@@ -135,3 +135,13 @@ test('no recently sent section before anything is sent', async (t) => {
   const snapshot = { roster: [{ key: 'bb', name: 'Tablet', isSelf: false, online: true }], sends: [] }
   t.absent(/Recently sent/.test(render(h(Send, { bridge: {}, snapshot }))))
 })
+
+test('the picker is a keyboard-reachable button, and the file input has a name', async (t) => {
+  const { render } = await import('preact-render-to-string')
+  const { h } = await import('preact')
+  const { Send } = await import('../ui/components/Send.js')
+  const html = render(h(Send, { bridge: {}, snapshot: { roster: [], sends: [] } }))
+  t.ok(/<button type="button" class="dropzone"[^>]*>Drop a JPEG/.test(html), 'the dropzone is a real button, so Tab and Space/Enter reach it')
+  t.absent(/<label class="dropzone"/.test(html), 'not a label wrapped around a hidden input')
+  t.ok(/<input type="file"[^>]*aria-label="Picture to send"/.test(html), 'the file input is named')
+})

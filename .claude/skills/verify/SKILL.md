@@ -48,7 +48,7 @@ All actions go through the real renderer: real mouse events at element centers, 
 |---|---|
 | `$P click <inst> "<exact text>" [nth]` | Mouse-clicks the visible button, label, or `aria-label` with that exact text. When several match, `nth` is 0-based: the nav tab `Send` is `0` and the Send-tab submit button is `1`. A roster name (such as `verify-b`) clicks that row's checkbox label. The command fails loudly if the element is missing or disabled. |
 | `$P fill <inst> "<placeholder>" "<value>"` | Clicks the input with that placeholder, selects all, and types the value. |
-| `$P file <inst> <path>` | Sets the Send tab's file input, the same as picking a file in the browse dialog. This path goes through `webUtils.getPathForFile` in preload. Never click the dropzone label, because that opens a native dialog. |
+| `$P file <inst> <path>` | Sets the Send tab's file input, the same as picking a file in the browse dialog. This path goes through `webUtils.getPathForFile` in preload. Never click the dropzone button, because that opens a native dialog. |
 | `$P wait <inst> "<text>" [sec]` | Polls `document.body.innerText` until the text appears (default 90 s). On timeout it prints the screen. |
 | `$P text <inst>` | Prints the current screen text. |
 | `$P state <inst>` | Prints the worker's `getState` snapshot. **Observation only.** |

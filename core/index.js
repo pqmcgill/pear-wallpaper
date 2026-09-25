@@ -17,8 +17,15 @@ const { validateImage } = require('./lib/image.js')
 
 const HEX64 = /^[0-9a-f]{64}$/
 const INVITE_TTL_MS = 24 * 60 * 60 * 1000
+const RECEIVED_KEEP = 10 // applied files kept per device: the Received list
 
 function noop() {}
+
+// A send nobody will fetch again: every target acked it, or acked a newer
+// send to itself (newest wins, so it skips this one for good).
+function settled(s, frontier) {
+  return s.targets.every((target) => s.acks.has(target) || frontier.get(target) > s.seq)
+}
 
 // meta.filename replicates to every member, so only the last path segment
 // ever leaves this device.
@@ -104,6 +111,7 @@ class WallpaperCore extends ReadyResource {
       await this.base.ready()
       await this.blobs.ready()
       await this._startSwarm()
+      this._relayBlobs().catch(noop) // storage left over by a crash converges without waiting for a peer
     }
 
     if (this.base === null) {
@@ -366,22 +374,53 @@ class WallpaperCore extends ReadyResource {
     return 'pending'
   }
 
-  async listReceived({ limit = 10 } = {}) {
+  // Capped at RECEIVED_KEEP: older applied wallpapers have no file any more
+  // (_pruneReceived), and a row must never name a file that is gone.
+  async listReceived({ limit = RECEIVED_KEEP } = {}) {
     if (this.base === null) return []
+    const { sends } = await this._ledger()
+    return this._received(sends).slice(0, Math.min(limit, RECEIVED_KEEP))
+  }
+
+  // The Received list: sends this device applied, newest first.
+  _received(sends) {
     const out = []
-    for await (const node of this.base.view.createReadStream({ gte: 'send/', lt: 'send0' })) {
-      const s = node.value
-      if (!s.targets.includes(this.deviceKey)) continue
-      const ack = await this.base.view.get(k.ack(s.id, this.deviceKey))
-      if (ack === null) continue
+    for (const s of sends) {
+      if (!s.acks.has(this.deviceKey)) continue
       out.push({
         id: s.id, fromKey: s.from, meta: s.meta,
-        filePath: path.join(this.storageDir, 'received', s.id + s.meta.ext),
-        appliedAt: ack.value.appliedAt
+        filePath: this._receivedPath(s),
+        appliedAt: s.acks.get(this.deviceKey)
       })
     }
     out.sort((a, b) => b.appliedAt - a.appliedAt)
-    return out.slice(0, limit)
+    return out
+  }
+
+  _receivedPath(s) {
+    return path.join(this.storageDir, 'received', s.id + s.meta.ext)
+  }
+
+  // One scan of send/: every send with the acks its targets appended, and
+  // each target's frontier, the newest seq it acked. A target that acked a
+  // newer send will never fetch this one (newest wins, see
+  // _newestUnappliedForMe and _targetStatus), which is what settled() and
+  // _pruneReceived build on.
+  async _ledger() {
+    const sends = []
+    const frontier = new Map() // target -> newest seq it acked
+    for await (const node of this.base.view.createReadStream({ gte: 'send/', lt: 'send0' })) {
+      const s = node.value
+      const acks = new Map() // target -> appliedAt
+      for (const target of s.targets) {
+        const ack = await this.base.view.get(k.ack(s.id, target))
+        if (ack === null) continue
+        acks.set(target, ack.value.appliedAt)
+        if (!(frontier.get(target) > s.seq)) frontier.set(target, s.seq)
+      }
+      sends.push({ ...s, acks })
+    }
+    return { sends, frontier }
   }
 
   // Scoped events (Task 10): replaces the Task 3 blanket 'roster-changed'
@@ -486,9 +525,8 @@ class WallpaperCore extends ReadyResource {
   // fails ENOENT because its .part is already gone. Share the one in-flight
   // fetch+write instead of racing two of them.
   async _materialize(entry) {
-    const dir = path.join(this.storageDir, 'received')
-    await fs.promises.mkdir(dir, { recursive: true })
-    const filePath = path.join(dir, entry.id + entry.meta.ext)
+    const filePath = this._receivedPath(entry)
+    await fs.promises.mkdir(path.dirname(filePath), { recursive: true })
     try {
       await fs.promises.access(filePath)
       return filePath // already on disk
@@ -530,9 +568,13 @@ class WallpaperCore extends ReadyResource {
     }
   }
 
-  // Download blobs for EVERY unapplied send (not just ours), so this
-  // device can serve them to targets later. This is what makes any
-  // online member a relay (spec §5).
+  // Make local storage match what the group still needs. Blobs: hold the
+  // blob of every send some target has yet to apply (not just ours, so this
+  // device can serve it later: any online member is a relay, spec §5), and
+  // clear the blob of every settled send, which nobody will fetch again.
+  // Files: see _pruneReceived. Local only, so apply() and the view stay
+  // deterministic; every step is idempotent, so a pass cut short by a crash
+  // is finished by the next one (on open, on every update, and from sync()).
   //
   // Coalesced (see sweep): this is wired to 'update' AND called from
   // sync(), so a burst of base updates (e.g. replicating several ops in
@@ -545,19 +587,37 @@ class WallpaperCore extends ReadyResource {
 
   async _relayOnce() {
     if (this.base === null || this.blobs === null || !this.blobs.local) return
-    for await (const node of this.base.view.createReadStream({ gte: 'send/', lt: 'send0' })) {
-      const s = node.value
-      let done = true
-      for (const target of s.targets) {
-        if ((await this.base.view.get(k.ack(s.id, target))) === null) done = false
-      }
-      if (done) continue
+    const ledger = await this._ledger()
+    await this._pruneReceived(ledger)
+    for (const s of ledger.sends) {
       // Already hold every block? Nothing to fetch. Without this, each
       // update re-ran a full (bounded, but up-to-30s-per-blob) download
       // for blobs already on disk, and re-swept forever-unacked sends to
       // revoked devices for the life of the group.
-      if (await this.blobs.has(s.blob)) continue
-      await this.blobs.get(s.blob, { timeoutMs: 30000 }).catch(() => {}) // bounded best effort; retried next sync
+      const held = await this.blobs.has(s.blob)
+      if (settled(s, ledger.frontier)) {
+        if (held) await this.blobs.clear(s.blob).catch(noop)
+      } else if (!held) {
+        await this.blobs.get(s.blob, { timeoutMs: 30000 }).catch(noop) // bounded best effort; retried next sync
+      }
+    }
+  }
+
+  // Keep the newest RECEIVED_KEEP applied files (the Received list) plus
+  // any send this device has not acked and could still apply. Every other
+  // file addressed to this device goes: an applied one that fell off the
+  // list, or one materialized for a send that a newer ack retired. The
+  // wallpaper the OS is showing is always kept: it is either the newest
+  // applied (a shell acks only after its setter ran) or a Re-apply of a
+  // listed one, which leaves the list only after ten newer applies each
+  // replaced it on screen.
+  async _pruneReceived({ sends, frontier }) {
+    const me = this.deviceKey
+    const keep = new Set(this._received(sends).slice(0, RECEIVED_KEEP).map((r) => r.id))
+    for (const s of sends) {
+      if (!s.targets.includes(me) || keep.has(s.id)) continue
+      if (!s.acks.has(me) && !(frontier.get(me) > s.seq)) continue // pending: the shell may be applying it
+      await fs.promises.unlink(this._receivedPath(s)).catch(noop)
     }
   }
 

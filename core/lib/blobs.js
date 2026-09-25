@@ -67,6 +67,16 @@ class BlobStore {
     }
   }
 
+  // Drop this ref's blocks from local storage. hypercore's clear frees the
+  // bytes and unsets the bitfield; the core's length and tree stay, so the
+  // same blocks can be fetched again from any peer that still has them.
+  async clear(ref) {
+    validateRef(ref)
+    if (ref.id.blockLength === 0) return
+    const blobs = await this._blobs(ref)
+    await blobs.clear(ref.id)
+  }
+
   async _blobs(ref) {
     if (ref.core === this.localKey) return this.local
     let blobs = this._remotes.get(ref.core)

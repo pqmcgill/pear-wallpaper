@@ -27,7 +27,7 @@ function createBridgeMain ({ core, transport, engine = null, platform = null, lo
   }
 
   async function reapply (wallpaperId) {
-    const list = await core.listReceived({ limit: 50 })
+    const list = await core.listReceived()
     const item = list.find((r) => r.id === wallpaperId)
     if (!item) throw new Error('unknown received wallpaper')
     await platform.setWallpaper(item.filePath)

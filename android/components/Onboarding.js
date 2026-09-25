@@ -67,6 +67,7 @@ export function Onboarding ({ bridge, dispatch }) {
   const attemptJoin = async (value) => {
     setJoinError(null)
     setJoining(true)
+    dispatch?.({ type: 'join-start' })
     try {
       await bridge.call('joinGroup', value)
     } catch (err) {

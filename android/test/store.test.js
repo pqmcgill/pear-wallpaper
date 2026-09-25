@@ -30,3 +30,9 @@ test('join-error sets joinError only — lastError is untouched (no ErrorBanner 
   expect(s.joinError).toBe('PAIRING_REJECTED: Pairing was rejected')
   expect(s.lastError).toBeNull()
 })
+
+test('join-start clears a previous attempt\'s joinError', () => {
+  const failed = reduce(initialSnapshot, { type: 'join-error', payload: { message: 'Invalid invite' } })
+  const s = reduce(failed, { type: 'join-start' })
+  expect(s.joinError).toBeNull()
+})

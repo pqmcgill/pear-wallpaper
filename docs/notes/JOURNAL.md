@@ -597,3 +597,4 @@
   suites), worklet 2/8 — all green. Physical-device checklist pending
   (qa-android.md).
 - 2026-09-25 Plan 4 a5-invite-presentation: Onboarding no longer mints a dead inline invite; Devices makes the creator's first invite on arrival, wrapped with a one-line instruction and QR. Join stays disabled until there is text. Live: page width 480 (was 884).
+- 2026-09-25 Plan 4 a9-login-toggle: login-item now only writes or removes the plist; no bootstrap/bootout, so unticking no longer SIGTERMs a login-launched app and toggles are idempotent. Proven with a throwaway-label launchd harness.

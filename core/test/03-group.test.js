@@ -16,6 +16,7 @@ test('createGroup: creator appears in its own roster', async function (t) {
   t.is(devices[0].name, 'alpha')
   t.is(devices[0].isSelf, true)
   t.is(devices[0].isCreator, true)
+  t.is(devices[0].online, true, 'self reads as online')
 })
 
 test('createGroup: group survives reopen', async function (t) {

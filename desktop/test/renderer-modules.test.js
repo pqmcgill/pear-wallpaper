@@ -154,3 +154,13 @@ test('the transport adapter the renderer imports is browser ESM, not CJS', (t) =
   t.ok(/export function/.test(src), 'transport adapter uses an ESM export')
   t.ok(!/module\.exports/.test(src), 'transport adapter has no CommonJS module.exports')
 })
+
+test('every stylesheet index.html links resolves to a real file', (t) => {
+  // A missing stylesheet fails silently and hides state the UI encodes in
+  // CSS (e.g. the online dot), so a stale href must fail here.
+  const hrefs = [...indexHtml.matchAll(/<link rel="stylesheet" href="([^"]+)"/g)].map((m) => m[1])
+  t.ok(hrefs.length > 0, 'index.html links a stylesheet')
+  for (const href of hrefs) {
+    t.ok(fs.existsSync(path.resolve(uiDir, href)), `${href} exists`)
+  }
+})

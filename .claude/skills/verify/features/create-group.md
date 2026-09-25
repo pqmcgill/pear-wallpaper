@@ -27,5 +27,5 @@ Preconditions:
 ## Gotchas
 
 - `Join a group` stays disabled until the invite box has text, so a click on it before `pw fill` fails as disabled.
-- `getState` reports `online: false` for self, and the online dot renders at zero width on every row, so online status can't be seen on screen (issue #15). Neither is a failed check.
+- Every roster row shows a dot plus the word `online` or `offline`. Self always reads `online`.
 - Verified live on 2026-09-25 (maintenance pass): onboarding render, create, and a roster of 1 with `isCreator: true`.

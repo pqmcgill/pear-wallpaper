@@ -70,3 +70,13 @@ test('InviteCard wraps the full invite, says what to do with it, and keeps the Q
   t.ok(/<svg/.test(html), 'renders the QR')
   t.ok(/class="qr"[^>]*width:\s*\d+px/.test(html), 'the QR has a fixed small width')
 })
+
+test('each device shows online or offline as text, not only a colored dot', async (t) => {
+  const { render } = await import('preact-render-to-string')
+  const { h } = await import('preact')
+  const { DeviceList } = await import('../ui/components/DeviceList.js')
+  const snapshot = { roster: [{ key: 'aa', name: 'Mac', isSelf: true, isCreator: true, online: true }, { key: 'bb', name: 'Tablet', isSelf: false, isCreator: false, online: false }] }
+  const html = render(h(DeviceList, { bridge: {}, snapshot, candidates: [] }))
+  t.ok(/Mac.*?online/s.test(html), 'Mac reads online')
+  t.ok(/Tablet.*?offline/s.test(html), 'Tablet reads offline')
+})

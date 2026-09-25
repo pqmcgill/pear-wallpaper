@@ -6,7 +6,7 @@ In the Send tab a member picks an image, ticks one or more target devices, and c
 
 - `send-pick-browse`: choosing a file via the file input shows its absolute path in the dropzone. This goes through `webUtils.getPathForFile` in preload.
 - `send-pick-drop`: dragging an image onto the dropzone (not drivable, see Gotchas).
-- `send-targets`: the checkbox for each non-self roster device. `Send` stays disabled until there is a file and at least one target.
+- `send-targets`: the checkbox for each non-self roster device, with `online` or `offline` after its name. A pending send to an offline device reads `Waiting for <name> to come online`. `Send` stays disabled until there is a file and at least one target.
 - `send-status`: the row shows the status of the newest send to that device: blank (never sent), `pending`, `delivered`, or `superseded` (the target applied a newer send first). Before a new send it still shows the previous send's status (issue #16).
 - `send-formats`: only JPEG, PNG and WebP up to 20 MB are accepted. The picker offers any image, and other formats (for example HEIC) are rejected only after `Send` with `unsupported image format (JPEG, PNG, WebP only)` (issue #18).
 - `send-apply`: the receiving device's worker sets the macOS desktop picture to `received/<id>.<ext>`.
@@ -33,6 +33,7 @@ Preconditions:
 ## Gotchas
 
 - `pw click a "Send"` with no `nth` clicks the **tab**, not the submit button.
+- To prove offline queuing, `pw stop b`, send, check for `Waiting for verify-b to come online`, then `pw launch b` again. The same userdata is reused, and the row turns `delivered`.
 - On a second send to the same device, `pw wait a "delivered"` passes at once on the previous send's status. Prove the new send landed with `pw state b` (one more `received[]` item) or the wallpaper hash.
 - Never click the dropzone label: it opens a native macOS dialog that CDP can't drive. Use `pw file`. Drag-and-drop (`send-pick-drop`) can't be driven with pw. Report it as unverified.
 - Both instances are on the same Mac, so an A→B send changes **your** desktop. Both instances apply to the same screen, so for B→A the proof is the path pointing into `userdata/a/received/`.

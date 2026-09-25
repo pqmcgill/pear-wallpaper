@@ -45,3 +45,29 @@ test('Send shows per-target status from snapshot.sends', async (t) => {
   const html = render(h(Send, { bridge: {}, snapshot }))
   t.ok(/delivered/.test(html), 'shows target status')
 })
+
+test('Send target rows show whether each device is online', async (t) => {
+  const { render } = await import('preact-render-to-string')
+  const { h } = await import('preact')
+  const { Send } = await import('../ui/components/Send.js')
+  const snapshot = {
+    roster: [{ key: 'bb', name: 'Tablet', isSelf: false, online: true }, { key: 'cc', name: 'Laptop', isSelf: false, online: false }],
+    sends: []
+  }
+  const html = render(h(Send, { bridge: {}, snapshot }))
+  t.ok(/Tablet.*?online.*?Laptop/s.test(html), 'Tablet reads online')
+  t.ok(/Laptop.*?offline/s.test(html), 'Laptop reads offline')
+})
+
+test('a pending send to an offline device says it is waiting for that device', async (t) => {
+  const { render } = await import('preact-render-to-string')
+  const { h } = await import('preact')
+  const { Send } = await import('../ui/components/Send.js')
+  const snapshot = {
+    roster: [{ key: 'bb', name: 'Tablet', isSelf: false, online: true }, { key: 'cc', name: 'Laptop', isSelf: false, online: false }],
+    sends: [{ id: 's1', targets: [{ key: 'bb', status: 'pending' }, { key: 'cc', status: 'pending' }] }]
+  }
+  const html = render(h(Send, { bridge: {}, snapshot }))
+  t.ok(/Waiting for Laptop to come online/.test(html), 'offline target explains the wait')
+  t.absent(/Waiting for Tablet/.test(html), 'online target does not claim to be waiting for it to come online')
+})

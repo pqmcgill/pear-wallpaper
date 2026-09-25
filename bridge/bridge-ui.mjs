@@ -22,6 +22,13 @@ export function createBridgeUi (transport) {
         transport.send({ t: 'req', id, cmd, args })
       })
     },
+    // For the shell to call when the other end of the transport died: its
+    // replies to these requests will never come. No timeout instead, since
+    // joinGroup legitimately stays pending until another device approves.
+    failPending (err) {
+      for (const p of pending.values()) p.reject(err)
+      pending.clear()
+    },
     on (event, cb) {
       if (!listeners.has(event)) listeners.set(event, new Set())
       listeners.get(event).add(cb)

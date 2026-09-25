@@ -26,7 +26,7 @@ $P launch a             # instance "a" (device name verify-a); prints {pid, port
 $P launch b             # second isolated instance (device name verify-b)
 ```
 
-`launch` runs `desktop/node_modules/electron/.../Electron . --user-data-dir=<run>/userdata/<name> --remote-debugging-port=<free port>` in `desktop/`. This is what `npm run dev -- -- --user-data-dir=…` does, without forge's wrapper process. Before launching, it writes `device-name.txt` (`verify-<name>`), which is the documented way to name a device before it joins. `launch` returns once the renderer has mounted Onboarding, Waiting, or MainView (60 s timeout). If launch fails, read the log path it prints.
+`launch` runs `desktop/node_modules/electron/.../Electron . --user-data-dir=<run>/userdata/<name> --remote-debugging-port=<free port>` in `desktop/`. This is what `npm run dev -- -- --user-data-dir=…` does, without forge's wrapper process. Before launching, it writes `device-name.txt` (`verify-<name>`), which is the documented way to name a device before it joins. `launch` returns once the renderer has left the `Starting…` screen and mounted Onboarding, Waiting, or MainView (60 s timeout). If launch fails, read the log path it prints.
 
 Prereq: run `npm install` in `desktop/` (it pulls `core/` and `bridge/` in through `file:` links, and those need their own `node_modules`). No build step is needed.
 
@@ -38,7 +38,7 @@ Prereq: run `npm install` in `desktop/` (it pulls `core/` and `bridge/` in throu
 $P doctor        # all instances in the current run; or: $P doctor a
 ```
 
-This check is read-only. For each instance it checks that the pid is alive and is our Electron (the command line contains our `--user-data-dir`), that a `bare` worker exists in its process group, which view the renderer shows, and that the worker answers `getState` with a 64-hex device key. It exits non-zero on any FAIL. Run it first whenever something looks wrong.
+This check is read-only. For each instance it checks that the pid is alive and is our Electron (the command line contains our `--user-data-dir`), that a `bare` worker exists in its process group, which view the renderer shows (`starting`, `worker-stopped`, `onboarding`, `waiting`, or `main`), and that the worker answers `getState` with a 64-hex device key. It exits non-zero on any FAIL. Run it first whenever something looks wrong.
 
 ## Drive
 

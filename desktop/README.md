@@ -59,7 +59,8 @@ which just forwards frames both directions without parsing them.
 ## Layout
 
 - `main.js` — Electron main entry: window/tray/single-instance/login-item,
-  embeds `pear-runtime`, launches the worker, relays IPC frames, handles
+  embeds `pear-runtime`, launches the worker (restarting it with backoff if
+  it crashes, via `lib/worker-supervisor.js`), relays IPC frames, handles
   graceful shutdown and OTA.
 - `preload.js` — `contextBridge`: exposes `window.bridgeTransport`
   (`send`/`onMessage`) to the renderer.
@@ -80,9 +81,12 @@ which just forwards frames both directions without parsing them.
   transport adapter moved to `../bridge/transport/duplex-json.js` (see
   above); the renderer-side adapter stays here as `ui/electron-ipc.js` (see
   below — it's desktop/Electron-specific, not shared).
+  `worker-supervisor.js` spawns the worker, relays its frames, restarts it
+  with backoff after a crash (giving up after five quick crashes), and
+  runs the graceful shutdown.
   `single-instance.js` is kept in-tree but retired from the boot path
   (Electron's own lock replaces it).
-- `ui/` — the Preact renderer (Onboarding/Waiting/MainView with
+- `ui/` — the Preact renderer (Starting/Onboarding/Waiting/MainView with
   Devices/Send/Received/Settings tabs), reused unchanged. `ui/index.html`
   loads `ui/app.js`, and carries an inline import map (CSP-hashed — see the
   comment in the file and `test/renderer-modules.test.js`) that resolves the

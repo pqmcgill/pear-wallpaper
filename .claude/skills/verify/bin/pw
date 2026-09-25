@@ -182,7 +182,8 @@ const commands = {
       const t = await pageTarget(port).catch(() => null)
       if (t) {
         const c = await connect(name)
-        const ready = await c.evaluate("!!document.querySelector('#app > .app-root > section, #app > .app-root > .main')").catch(() => false)
+        // Past the "Starting…" screen, on a view that came from real worker state.
+        const ready = await c.evaluate("!!document.querySelector('#app .onboarding, #app .waiting, #app .main')").catch(() => false)
         c.close()
         if (ready) { console.log(JSON.stringify(inst)); return }
       }
@@ -205,7 +206,7 @@ const commands = {
       lines.push(bare ? '  ok   bare worker process present' : '  FAIL no bare worker in process group')
       if (!bare) ok = false
       const c = await connect(inst.name)
-      const view = await c.evaluate(`(() => { const r = document.querySelector('#app .app-root'); if (!r) return 'blank'; if (r.querySelector('.onboarding')) return 'onboarding'; if (r.querySelector('.waiting')) return 'waiting'; if (r.querySelector('.main')) return 'main'; return 'unknown' })()`)
+      const view = await c.evaluate(`(() => { const r = document.querySelector('#app .app-root'); if (!r) return 'blank'; if (r.querySelector('.starting')) return 'starting'; if (r.querySelector('.worker-stopped')) return 'worker-stopped'; if (r.querySelector('.onboarding')) return 'onboarding'; if (r.querySelector('.waiting')) return 'waiting'; if (r.querySelector('.main')) return 'main'; return 'unknown' })()`)
       const state = await c.evaluate(bridgeCall('getState', []))
       c.close()
       lines.push(`  ok   renderer view: ${view}`)

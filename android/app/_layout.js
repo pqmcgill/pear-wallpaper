@@ -73,7 +73,10 @@ export default function Layout () {
     // /send with nothing staged, and never let the throw escape this effect.
     try {
       const filePath = stageSharedImage(file.path)
-      router.replace({ pathname: '/send', params: { filePath } })
+      // The staged copy has a generated name; the share's display name is
+      // what the receiver should see.
+      const params = file.fileName ? { filePath, filename: file.fileName } : { filePath }
+      router.replace({ pathname: '/send', params })
     } catch (err) {
       console.warn('[share-intent] failed to stage shared image:', err && err.message)
       dispatch({ type: 'error', payload: { message: `Couldn't open the shared image: ${err.message}` } })

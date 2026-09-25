@@ -6,3 +6,6 @@
 .send .sent li li { padding-left: 16px; }
 .send .sent .when { margin-left: 8px; font-size: 0.85em; color: #555; }
 .send .sent .status.delivered { color: #1f9d45; }
+.received .from { display: inline-flex; flex-direction: column; margin: 0 8px; vertical-align: middle; }
+.received .from small { color: #555; }
+.received .ok { margin-left: 8px; color: #1f9d45; }

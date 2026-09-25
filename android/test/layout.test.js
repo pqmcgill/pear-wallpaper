@@ -92,6 +92,20 @@ test('a successful stageSharedImage still navigates to /send with the staged pat
   })
 })
 
+// #2: the staged copy has a generated name, so the share's own display
+// name rides along for the receiver to see.
+test('the shared file\'s display name travels to /send with the staged path', async () => {
+  mockShareIntentState.shareIntent.files[0].fileName = 'beach.png'
+  mockStageSharedImage.mockReturnValue('/staged/1787510958028-k3j9x0.png')
+
+  await render(<Layout />)
+
+  expect(mockRouterReplace).toHaveBeenCalledWith({
+    pathname: '/send',
+    params: { filePath: '/staged/1787510958028-k3j9x0.png', filename: 'beach.png' }
+  })
+})
+
 test('a failed wallpaper apply reaches the error banner', async () => {
   mockShareIntentState = { hasShareIntent: false, shareIntent: {}, resetShareIntent: mockResetShareIntent }
   const { createApplyController } = require('../lib/apply-controller')

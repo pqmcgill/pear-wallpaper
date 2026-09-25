@@ -1,0 +1,10 @@
+enable ok
+enable left job unloaded; bootstrapping to simulate next login
+1790373195549 main started pid 1541
+1790373196586 worker isEnabled=true
+1790373196587 worker disabled twice; isEnabled=false plist=false
+1790373196712 worker enabled twice; isEnabled=true plist=true
+1790373196712 worker done
+1790373196745 main worker exit 0 null
+RESULT main pid 1541 still running
+Could not find service "com.pw-a9-selfbootout" in domain for user gui: 501

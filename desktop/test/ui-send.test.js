@@ -34,18 +34,6 @@ test('Send disables the button until a file and at least one target are chosen',
   t.ok(/<button[^>]*disabled/.test(html), 'send button starts disabled')
 })
 
-test('Send shows per-target status from snapshot.sends', async (t) => {
-  const { render } = await import('preact-render-to-string')
-  const { h } = await import('preact')
-  const { Send } = await import('../ui/components/Send.js')
-  const snapshot = {
-    roster: [{ key: 'bb', name: 'Tablet', isSelf: false }],
-    sends: [{ id: 's1', targets: [{ key: 'bb', status: 'delivered' }] }]
-  }
-  const html = render(h(Send, { bridge: {}, snapshot }))
-  t.ok(/delivered/.test(html), 'shows target status')
-})
-
 test('Send target rows show whether each device is online', async (t) => {
   const { render } = await import('preact-render-to-string')
   const { h } = await import('preact')
@@ -59,15 +47,57 @@ test('Send target rows show whether each device is online', async (t) => {
   t.ok(/Laptop.*?offline/s.test(html), 'Laptop reads offline')
 })
 
-test('a pending send to an offline device says it is waiting for that device', async (t) => {
+test('a device row shows no status from a previous send', async (t) => {
+  const { render } = await import('preact-render-to-string')
+  const { h } = await import('preact')
+  const { Send } = await import('../ui/components/Send.js')
+  const snapshot = {
+    roster: [{ key: 'bb', name: 'Tablet', isSelf: false, online: true }],
+    sends: [{ id: 's1', meta: { filename: 'beach.png' }, sentAt: 1, targets: [{ key: 'bb', status: 'delivered' }] }]
+  }
+  const html = render(h(Send, { bridge: {}, snapshot }))
+  const picker = html.split('class="sent"')[0]
+  t.ok(/Tablet/.test(picker), 'Tablet is still a target')
+  t.absent(/delivered/i.test(picker), 'the target row does not claim the next picture was delivered')
+})
+
+test('recently sent lists each send with its picture and a friendly status per device', async (t) => {
   const { render } = await import('preact-render-to-string')
   const { h } = await import('preact')
   const { Send } = await import('../ui/components/Send.js')
   const snapshot = {
     roster: [{ key: 'bb', name: 'Tablet', isSelf: false, online: true }, { key: 'cc', name: 'Laptop', isSelf: false, online: false }],
-    sends: [{ id: 's1', targets: [{ key: 'bb', status: 'pending' }, { key: 'cc', status: 'pending' }] }]
+    sends: [
+      { id: 's2', meta: { filename: '/Users/me/Pictures/beach.png' }, sentAt: 2, targets: [{ key: 'bb', status: 'pending' }, { key: 'cc', status: 'pending' }] },
+      { id: 's1', meta: { filename: 'C:\\pics\\dog.jpg' }, sentAt: 1, targets: [{ key: 'bb', status: 'superseded' }, { key: 'dd', status: 'delivered' }] }
+    ]
   }
-  const html = render(h(Send, { bridge: {}, snapshot }))
-  t.ok(/Waiting for Laptop to come online/.test(html), 'offline target explains the wait')
-  t.absent(/Waiting for Tablet/.test(html), 'online target does not claim to be waiting for it to come online')
+  const sent = render(h(Send, { bridge: {}, snapshot })).split('class="sent"')[1]
+  t.ok(/Recently sent/.test(sent), 'has a heading')
+  t.ok(/beach\.png[\s\S]*dog\.jpg/.test(sent), 'newest first, by picture name')
+  t.absent(/Users|pics/.test(sent), 'shows the file name, not the folder')
+  t.ok(/Tablet[\s\S]*Not delivered yet[\s\S]*Laptop[\s\S]*Waiting for Laptop to come online/.test(sent), 'pending reads not delivered yet, or waiting when offline')
+  t.ok(/Tablet[\s\S]*Replaced by a newer picture/.test(sent), 'superseded reads replaced by a newer picture')
+  t.ok(/A removed device[\s\S]*Delivered/.test(sent), 'delivered, to a device no longer in the group')
+  t.absent(/pending|superseded/.test(sent.replace(/<[^>]*>/g, '')), 'no raw core states')
+})
+
+test('recently sent copes with a send that has no file name', async (t) => {
+  const { render } = await import('preact-render-to-string')
+  const { h } = await import('preact')
+  const { Send } = await import('../ui/components/Send.js')
+  const snapshot = {
+    roster: [{ key: 'bb', name: 'Tablet', isSelf: false, online: true }],
+    sends: [{ id: 's1', meta: { filename: null }, sentAt: 1, targets: [{ key: 'bb', status: 'delivered' }] }]
+  }
+  const sent = render(h(Send, { bridge: {}, snapshot })).split('class="sent"')[1]
+  t.ok(/A picture/.test(sent), 'falls back to a generic label')
+})
+
+test('no recently sent section before anything is sent', async (t) => {
+  const { render } = await import('preact-render-to-string')
+  const { h } = await import('preact')
+  const { Send } = await import('../ui/components/Send.js')
+  const snapshot = { roster: [{ key: 'bb', name: 'Tablet', isSelf: false, online: true }], sends: [] }
+  t.absent(/Recently sent/.test(render(h(Send, { bridge: {}, snapshot }))))
 })

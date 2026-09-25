@@ -1,5 +1,5 @@
 import { h } from 'preact'
-import { useState } from 'preact/hooks'
+import { useState, useRef } from 'preact/hooks'
 import htm from 'htm'
 import { Presence } from './Presence.js'
 import { Sent, fileName } from './Sent.js'
@@ -58,6 +58,7 @@ export function Send ({ bridge, snapshot }) {
   const [filePath, setFilePath] = useState(null)
   const [targets, setTargets] = useState({})
   const [sendError, setSendError] = useState(null)
+  const fileInput = useRef(null)
   const targetable = snapshot.roster.filter((d) => !d.isSelf)
   const chosen = Object.keys(targets).filter((k) => targets[k])
 
@@ -92,10 +93,11 @@ export function Send ({ bridge, snapshot }) {
   }
   return html`
     <section class="send" onDragOver=${(e) => e.preventDefault()} onDrop=${onDrop}>
-      <label class="dropzone">
+      <button type="button" class="dropzone" onClick=${() => fileInput.current.click()}
+        aria-label=${filePath ? `Picture to send: ${fileName(filePath)}. Choose a different picture` : undefined}>
         ${filePath ? fileName(filePath) : 'Drop a JPEG, PNG or WebP picture here, or click to browse'}
-        <input type="file" accept="image/jpeg,image/png,image/webp" onChange=${onFileInput} style="display:none" />
-      </label>
+      </button>
+      <input type="file" ref=${fileInput} aria-label="Picture to send" accept="image/jpeg,image/png,image/webp" onChange=${onFileInput} style="display:none" />
       <ul>
         ${targetable.map((d) => html`
           <li key=${d.key}>

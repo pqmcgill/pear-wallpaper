@@ -79,8 +79,10 @@ async function connect (name) {
   await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = () => reject(new Error('CDP connect failed')) })
   let id = 0
   const pending = new Map()
+  const listeners = new Map()
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data)
+    if (msg.method && listeners.has(msg.method)) listeners.get(msg.method)(msg.params)
     if (msg.id && pending.has(msg.id)) {
       const { resolve, reject } = pending.get(msg.id); pending.delete(msg.id)
       msg.error ? reject(new Error(msg.error.message)) : resolve(msg.result)
@@ -94,7 +96,7 @@ async function connect (name) {
     if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text)
     return r.result.value
   }
-  return { inst, send, evaluate, close: () => ws.close() }
+  return { inst, send, evaluate, onEvent: (method, fn) => listeners.set(method, fn), close: () => ws.close() }
 }
 
 // Finds a visible, enabled clickable element whose trimmed text equals `text`
@@ -238,6 +240,31 @@ const commands = {
     await c.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', modifiers: 4 })
     await c.send('Input.insertText', { text: value })
     c.close()
+  },
+
+  // Presses one key as a real keyboard event (Tab, Enter, Space, Escape), and
+  // prints what has focus afterwards. With --expect-chooser it also reports
+  // whether the press opened the file chooser, which is intercepted so no
+  // native dialog appears.
+  async key (name, key, flag) {
+    const KEYS = { Tab: [9, 'Tab', ''], Enter: [13, 'Enter', '\r'], Space: [32, 'Space', ' '], Escape: [27, 'Escape', ''] }
+    if (!KEYS[key]) die('usage: pw key <name> <Tab|Enter|Space|Escape> [--expect-chooser]')
+    const [code, codeName, text] = KEYS[key]
+    const c = await connect(name)
+    let opened = false
+    if (flag === '--expect-chooser') {
+      await c.send('Page.enable')
+      await c.send('Page.setInterceptFileChooserDialog', { enabled: true })
+      c.onEvent('Page.fileChooserOpened', () => { opened = true })
+    }
+    const base = { key: key === 'Space' ? ' ' : codeName, code: codeName, windowsVirtualKeyCode: code, nativeVirtualKeyCode: code }
+    await c.send('Input.dispatchKeyEvent', { type: 'keyDown', ...base, ...(text ? { text } : {}) })
+    await c.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base })
+    await sleep(300)
+    const focus = await c.evaluate(`(() => { const e = document.activeElement; return e ? e.tagName.toLowerCase() + ' "' + (e.getAttribute('aria-label') || e.innerText || '').trim().slice(0, 60) + '"' : 'none' })()`)
+    if (flag === '--expect-chooser') await c.send('Page.setInterceptFileChooserDialog', { enabled: false })
+    c.close()
+    console.log(flag === '--expect-chooser' ? `focus: ${focus}; file chooser opened: ${opened}` : `focus: ${focus}`)
   },
 
   // Sets the Send tab's real <input type=file> (what the native picker would
@@ -392,7 +419,7 @@ async function stopInst (inst) {
 
 const [cmd, ...args] = process.argv.slice(2)
 if (!commands[cmd]) {
-  console.log('usage: pw <start-run|launch|doctor|text|click|fill|file|wait|read|state|shot|eval|wallpaper|fixture|hash|stop|cleanup> ...')
+  console.log('usage: pw <start-run|launch|doctor|text|click|fill|file|wait|read|key|state|shot|eval|wallpaper|fixture|hash|stop|cleanup> ...')
   process.exit(cmd ? 1 : 0)
 }
 commands[cmd](...args).catch((err) => die(err.stack || err.message))

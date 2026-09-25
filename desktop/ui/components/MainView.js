@@ -7,6 +7,8 @@ import { Received } from './Received.js'
 import { Settings } from './Settings.js'
 const html = htm.bind(h)
 
+const TABS = [['devices', 'Devices'], ['send', 'Send'], ['received', 'Received'], ['settings', 'Settings']]
+
 // Task 8's MainView stub is replaced here with the real tabbed composition.
 // Candidates accumulate from 'candidate' events (bridge-main pushes one per
 // core 'pairing-request') and are pruned once the candidate's key shows up
@@ -27,10 +29,8 @@ export function MainView ({ bridge, snapshot }) {
   return html`
     <div class="main">
       <nav>
-        <button onClick=${() => setTab('devices')}>Devices</button>
-        <button onClick=${() => setTab('send')}>Send</button>
-        <button onClick=${() => setTab('received')}>Received</button>
-        <button onClick=${() => setTab('settings')}>Settings</button>
+        ${TABS.map(([id, label]) => html`
+          <button key=${id} onClick=${() => setTab(id)} aria-current=${tab === id ? 'page' : undefined}>${label}</button>`)}
       </nav>
       ${tab === 'devices' && html`<${DeviceList} bridge=${bridge} snapshot=${snapshot} candidates=${pruned} />`}
       ${tab === 'send' && html`<${Send} bridge=${bridge} snapshot=${snapshot} />`}

@@ -73,7 +73,7 @@ which just forwards frames both directions without parsing them.
   and RN). Desktop depends on it as `file:../bridge`; see its own README/
   package.json for the full interface.
 - `lib/` — desktop-only, runtime-agnostic logic: `device-name.js`,
-  `login-item.js` (LaunchAgent plist write/bootstrap/bootout),
+  `login-item.js` (writes or removes the LaunchAgent plist; launchd reads it at next login),
   `platform/` (`darwin.js`'s `osascript` wallpaper setter, selected via
   `platform/index.js`), plus `compat/` (Bare shims for `process` and
   `child_process`, needed because Bare has no Node builtins). The Bare-side

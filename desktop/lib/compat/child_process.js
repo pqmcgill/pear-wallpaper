@@ -3,13 +3,12 @@
 // Bare has no builtin 'child_process' module; process spawning under Bare
 // goes through the `bare-subprocess` package instead (see
 // node_modules/bare-subprocess/index.js — it exposes `spawn`/`spawnSync`,
-// not `execFile`). `lib/login-item.js` and `lib/platform/darwin.js` (both
-// reused, unmodified) do:
+// not `execFile`). `lib/platform/darwin.js` (reused, unmodified) does:
 //   const { execFile } = require('child_process')
 //   const { promisify } = require('util')
 //   const execFileP = promisify(execFile)
-//   await execFileP(cmd, args)              // login-item.js: ignores the resolved value
-//   const { stdout } = await execFileP(cmd, args) // darwin.js: currentWallpaper() only
+//   await execFileP(cmd, args)                    // setWallpaper: ignores the resolved value
+//   const { stdout } = await execFileP(cmd, args) // currentWallpaper() only
 // `bare-utils`'s `promisify` (see desktop/package.json's "util" imports
 // remap) is generic — it does not implement Node's `util.promisify.custom`
 // special-casing that gives real `child_process.execFile` its
@@ -18,7 +17,7 @@
 // would flatten to just `stdout`, breaking darwin.js's `{ stdout }`
 // destructure), this shim's callback resolves a single `{ stdout, stderr }`
 // object as its second argument — satisfying both call sites without
-// requiring changes to either reused file.
+// requiring changes to darwin.js.
 const subprocess = require('bare-subprocess')
 
 function execFile (file, args, callback) {

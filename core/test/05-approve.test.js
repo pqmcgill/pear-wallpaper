@@ -142,3 +142,47 @@ test('approve: burning the invite rejects other pending candidates on the same i
   await until(creator, 'update', async () => (await creator.listDevices()).length === 2)
   t.is((await creator.listDevices()).length, 2, 'only the approved device landed in the roster')
 })
+
+// #4: the joiner quits while waiting for approval, relaunches, and the creator
+// approves the request it was already shown. blind-pairing keys the member's
+// pending request on a session token derived from the invite and the
+// candidate's userData, both stable across the restart, so the resumed
+// candidate is the same request to the creator and approve() reaches it.
+test('approve: a join interrupted by close() resumes and completes on approve', async function (t) {
+  const tn = await makeTestnet(t)
+  const creator = new WallpaperCore({
+    storageDir: await tmpDir(t), deviceName: 'creator', bootstrap: tn.bootstrap
+  })
+  await creator.ready()
+  await creator.createGroup()
+  t.teardown(() => creator.close())
+  const invite = await creator.createInvite()
+
+  const dir = await tmpDir(t)
+  const joiner = new WallpaperCore({ storageDir: dir, deviceName: 'phone', bootstrap: tn.bootstrap })
+  await joiner.ready()
+  let candidateKey = null
+  creator.on('pairing-request', ({ candidateKey: ck }) => { candidateKey = ck })
+  joiner.joinGroup(invite).catch(() => {})
+  await until(creator, 'pairing-request', () => candidateKey !== null, 8000)
+  await joiner.close()
+
+  const joiner2 = new WallpaperCore({ storageDir: dir, deviceName: 'phone', bootstrap: tn.bootstrap })
+  await joiner2.ready()
+  t.teardown(() => joiner2.close())
+  // Approve only once the relaunched candidate has re-sent its request to
+  // the creator (its first broadcast on a live channel), the way a human
+  // approves after the joiner is back on the Waiting screen.
+  await until(joiner2, 'roster-changed', () => {
+    const active = joiner2._activeJoin
+    return active !== null && active.candidate !== null && active.candidate.visited.size > 0
+  }, 8000)
+  await creator.approve(candidateKey)
+
+  // groupStatus flips to member as soon as the base boots; the pending-invite
+  // record is retired at the end of the join, so wait on that.
+  await until(joiner2, 'update', async () => (await joiner2.meta.get('pending-invite')) === null)
+  t.is(joiner2.groupStatus, 'member', 'resumed join completed on approve')
+  await until(creator, 'update', async () => (await creator.listDevices()).length === 2)
+  t.alike((await joiner2.listDevices()).map((d) => d.name).sort(), ['creator', 'phone'])
+})

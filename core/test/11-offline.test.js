@@ -93,3 +93,29 @@ test('sync: an unfetchable blob does not starve the receive step', async functio
   t.ok(got !== null, 'sync() ran its receive step despite the stalled blob')
   t.is(got && got.id, id, 'and delivered the fetchable wallpaper, not the stuck one')
 })
+
+// #3 regression, relay side. Same drop-not-queue shape as the receive
+// sweep: a send that landed while b's relay sweep was mid-fetch was not
+// fetched until some later op re-triggered the sweep. b is not a target,
+// so its only blobs.get calls are the relay's.
+test('relay: a send that lands mid-sweep is fetched once the sweep finishes', async function (t) {
+  const { a, b, c } = await trio(t)
+  const get = b.blobs.get.bind(b.blobs)
+  let release
+  const gate = new Promise((resolve) => { release = resolve })
+  let fetches = 0
+  b.blobs.get = async (ref, opts) => {
+    if (++fetches === 1) await gate
+    return get(ref, opts)
+  }
+
+  await a.sendWallpaper(fakePng(), [c.deviceKey])
+  await until(b, 'update', () => fetches === 1)
+  const { id } = await a.sendWallpaper(fakePng(8192), [c.deviceKey])
+  await until(b, 'update', async () => (await b.base.view.get(k.send(id))) !== null)
+  release()
+
+  const { blob } = (await b.base.view.get(k.send(id))).value
+  await until(b, 'update', () => b.blobs.has(blob)).catch(() => {})
+  t.ok(await b.blobs.has(blob), 'relay holds the send that landed while it was busy')
+})

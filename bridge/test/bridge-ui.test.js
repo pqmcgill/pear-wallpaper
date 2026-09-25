@@ -33,3 +33,20 @@ test('on() delivers pushed events', async (t) => {
   mainT.send({ t: 'evt', event: 'candidate', payload: { candidateKey: 'cc', name: 'Phone' } })
   t.alike(await got, { candidateKey: 'cc', name: 'Phone' })
 })
+
+test('failPending() rejects every in-flight call, and later calls still work', async (t) => {
+  const { createBridgeUi } = await import('../bridge-ui.mjs')
+  const [uiT, mainT] = pairTransport()
+  const reqs = []
+  mainT.onMessage((m) => { if (m.t === 'req') reqs.push(m) })
+  const bridge = createBridgeUi(uiT)
+  const a = bridge.call('createGroup')
+  const b = bridge.call('joinGroup', 'INV')
+  bridge.failPending(new Error('worker restarting'))
+  await t.exception(() => a, /worker restarting/)
+  await t.exception(() => b, /worker restarting/)
+  mainT.send({ t: 'res', id: reqs[0].id, ok: true, value: 'late' })
+  const c = bridge.call('getState')
+  mainT.send({ t: 'res', id: reqs[2].id, ok: true, value: { ok: 1 } })
+  t.alike(await c, { ok: 1 })
+})

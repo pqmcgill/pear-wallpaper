@@ -3,17 +3,19 @@ import { View, Text, Pressable, StyleSheet } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { DeviceList } from './DeviceList'
 import { Received } from './Received'
+import { Sent } from './Sent'
 import { Settings } from './Settings'
 import { setWallpaper } from '../modules/wallpaper-setter'
 import { getTarget } from '../lib/settings'
 
 // Port of desktop/ui/components/MainView.js's tabbed composition, minus
 // the Send tab — Android has no "pick a local file and send it" flow (out
-// of this milestone's scope per the brief; YAGNI). Candidate
-// accumulate/prune logic (from 'candidate' bridge events, pruned once the
-// key shows up in snapshot.roster) is copied verbatim from desktop.
-export function MainView ({ bridge, snapshot }) {
-  const [tab, setTab] = useState('devices')
+// of this milestone's scope per the brief; YAGNI). Sending starts from the
+// share sheet (app/send.js); the Sent tab shows how those sends are doing.
+// Candidate accumulate/prune logic (from 'candidate' bridge events, pruned
+// once the key shows up in snapshot.roster) is copied verbatim from desktop.
+export function MainView ({ bridge, snapshot, initialTab = 'devices' }) {
+  const [tab, setTab] = useState(initialTab)
   const [candidates, setCandidates] = useState([])
   // QA finding (Task 7, on-device): MainView is the first screen whose
   // content is pinned to the very top of the window (every earlier screen
@@ -46,12 +48,16 @@ export function MainView ({ bridge, snapshot }) {
         <Pressable onPress={() => setTab('received')}>
           <Text style={tab === 'received' ? styles.navActive : styles.navItem}>Received</Text>
         </Pressable>
+        <Pressable onPress={() => setTab('sent')}>
+          <Text style={tab === 'sent' ? styles.navActive : styles.navItem}>Sent</Text>
+        </Pressable>
         <Pressable onPress={() => setTab('settings')}>
           <Text style={tab === 'settings' ? styles.navActive : styles.navItem}>Settings</Text>
         </Pressable>
       </View>
       {tab === 'devices' && <DeviceList bridge={bridge} snapshot={snapshot} candidates={pruned} />}
       {tab === 'received' && <Received snapshot={snapshot} setter={setWallpaper} getTarget={getTarget} />}
+      {tab === 'sent' && <Sent snapshot={snapshot} />}
       {tab === 'settings' && <Settings bridge={bridge} snapshot={snapshot} />}
     </View>
   )

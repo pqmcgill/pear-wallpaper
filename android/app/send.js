@@ -88,10 +88,9 @@ export function SendScreen ({ bridge, snapshot, filePath, onSent, onCancel }) {
 // The actual expo-router route: wires SendScreen to the real bridge/snapshot
 // (via the same SnapshotContext every other screen consumes, through
 // app/index.js) and the staged filePath that _layout.js's share-intent hook
-// passed as this route's search param. onSent navigates back to Main —
-// bridge-main's own 'send-updated'/'state' events (already wired in
-// _layout.js) then surface the send's status there, same as desktop's Send
-// tab after a successful call.
+// passed as this route's search param. onSent navigates back to Main's Sent
+// tab, where bridge-main's 'send-updated' state pushes keep each target's
+// delivery status current.
 export default function Send () {
   const { bridge, snapshot } = useContext(SnapshotContext)
   const { filePath } = useLocalSearchParams()
@@ -102,7 +101,7 @@ export default function Send () {
       bridge={bridge}
       snapshot={snapshot}
       filePath={filePath}
-      onSent={() => router.replace('/')}
+      onSent={() => router.replace({ pathname: '/', params: { tab: 'sent' } })}
       onCancel={() => router.replace('/')}
     />
   )

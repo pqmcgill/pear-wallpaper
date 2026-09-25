@@ -596,3 +596,4 @@
   too). Final suites: bridge 20/47, desktop 39/97, android ui 61 (14
   suites), worklet 2/8 — all green. Physical-device checklist pending
   (qa-android.md).
+- 2026-09-25 Plan 4 a5-invite-presentation: Onboarding no longer mints a dead inline invite; Devices makes the creator's first invite on arrival, wrapped with a one-line instruction and QR. Join stays disabled until there is text. Live: page width 480 (was 884).

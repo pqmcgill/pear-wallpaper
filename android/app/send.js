@@ -24,7 +24,7 @@ function discardStaged (filePath) {
   }
 }
 
-export function SendScreen ({ bridge, snapshot, filePath, onSent, onCancel }) {
+export function SendScreen ({ bridge, snapshot, filePath, filename, onSent, onCancel }) {
   const [targets, setTargets] = useState({})
   const [sendError, setSendError] = useState(null)
   const [sending, setSending] = useState(false)
@@ -35,7 +35,8 @@ export function SendScreen ({ bridge, snapshot, filePath, onSent, onCancel }) {
     setSendError(null)
     setSending(true)
     try {
-      await bridge.call('sendWallpaper', { filePath, targets: chosen })
+      // null, not the staged file's generated name, when the share had none.
+      await bridge.call('sendWallpaper', { filePath, targets: chosen, filename: filename || null })
       // core has its own copy of the image in hyperblobs by now.
       discardStaged(filePath)
       onSent?.()
@@ -93,7 +94,7 @@ export function SendScreen ({ bridge, snapshot, filePath, onSent, onCancel }) {
 // delivery status current.
 export default function Send () {
   const { bridge, snapshot } = useContext(SnapshotContext)
-  const { filePath } = useLocalSearchParams()
+  const { filePath, filename } = useLocalSearchParams()
   const router = useRouter()
 
   return (
@@ -101,6 +102,7 @@ export default function Send () {
       bridge={bridge}
       snapshot={snapshot}
       filePath={filePath}
+      filename={filename}
       onSent={() => router.replace({ pathname: '/', params: { tab: 'sent' } })}
       onCancel={() => router.replace('/')}
     />

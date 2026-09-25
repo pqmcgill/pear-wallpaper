@@ -134,7 +134,7 @@ await core.ready()
 
 ## Sending
 
-- **`await core.sendWallpaper(image: string | Buffer, targets: string[]): Promise<{ id: string }>`**
+- **`await core.sendWallpaper(image: string | Buffer, targets: string[], { filename?: string | null } = {}): Promise<{ id: string }>`**
   Validates the image (JPEG/PNG/WebP by magic bytes, 20 MB cap — throws
   `'unsupported image format (JPEG, PNG, WebP only)'` or `'image
   exceeds 20 MB cap'`), stores it in this device's blob store, appends
@@ -144,7 +144,11 @@ await core.ready()
   already be on the roster or the whole call throws `` `target ${key}
   is not in the roster` `` before anything is appended. Throws `'not
   in a group'` with no group, `'targets required'` for an empty/non-
-  array `targets`.
+  array `targets`. `filename` is the display name recorded in
+  `meta.filename`; `null` records none, and leaving it out lets a
+  string `image` supply its own name. Only the last path segment is
+  kept, because `meta` replicates to every member and a local path
+  would leak folder and user names.
 
 - **`await core.listSends({ limit = 20 } = {}): Promise<Array<{ id, meta, sentAt, targets: [{ key, status: 'pending' | 'delivered' | 'superseded' }] }>>`**
   This device's sent history, newest first (by log order, not
@@ -183,9 +187,10 @@ await core.ready()
   This is the shell's trigger to run the OS setter. `meta` is `{ ext,
   byteLength, filename }`, computed by `sendWallpaper()` from the
   image it was given (`ext` from the format sniff, `byteLength` from
-  the buffer, `filename` only if `sendWallpaper()`'s `image` argument
-  was a path string, else `null`) — the caller never passes `meta`
-  directly.
+  the buffer, `filename` the basename of the `filename` option or of a
+  path-string `image`, else `null`) — the caller never passes `meta`
+  directly. Groups created before this rule may still hold full paths
+  in `filename`, so shells basename it again before display.
 
 - **`await core.pendingWallpaper(): Promise<{ id, filePath, fromKey, meta } | null>`**
   Pull-based twin of the `'wallpaper'` event, for shells that wake up

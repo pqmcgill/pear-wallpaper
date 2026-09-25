@@ -19,7 +19,7 @@ function fakeCore () {
     async createGroup () { this.calls.push(['createGroup']) },
     async createInvite () { this.calls.push(['createInvite']); return 'INVITE123' },
     async approve (k) { this.calls.push(['approve', k]) },
-    async sendWallpaper (img, targets) { this.calls.push(['sendWallpaper', img, targets]); return { id: 'x' } }
+    async sendWallpaper (img, targets, opts) { this.calls.push(['sendWallpaper', img, targets, opts]); return { id: 'x' } }
   })
 }
 
@@ -45,7 +45,16 @@ test('sendWallpaper command maps {filePath,targets} to positional core call', as
   const reply = new Promise((res) => uiT.onMessage((m) => { if (m.t === 'res' && m.id === 7) res(m) }))
   uiT.send({ t: 'req', id: 7, cmd: 'sendWallpaper', args: [{ filePath: '/a.png', targets: ['bb'] }] })
   await reply
-  t.alike(core.calls.find((c) => c[0] === 'sendWallpaper'), ['sendWallpaper', '/a.png', ['bb']])
+  t.alike(core.calls.find((c) => c[0] === 'sendWallpaper'), ['sendWallpaper', '/a.png', ['bb'], { filename: undefined }])
+})
+
+test('sendWallpaper command passes a display filename through to core', async (t) => {
+  const [mainT, uiT] = pairTransport(); const core = fakeCore()
+  createBridgeMain({ core, platform: {}, loginItem: { async isEnabled () { return false } }, engine: { lastSync: null, async syncNow () {} }, transport: mainT }).start()
+  const reply = new Promise((res) => uiT.onMessage((m) => { if (m.t === 'res' && m.id === 9) res(m) }))
+  uiT.send({ t: 'req', id: 9, cmd: 'sendWallpaper', args: [{ filePath: '/staged/1-abc.png', targets: ['bb'], filename: 'beach.png' }] })
+  await reply
+  t.alike(core.calls.find((c) => c[0] === 'sendWallpaper'), ['sendWallpaper', '/staged/1-abc.png', ['bb'], { filename: 'beach.png' }])
 })
 
 test('reapply looks up filePath in listReceived and calls platform.setWallpaper', async (t) => {

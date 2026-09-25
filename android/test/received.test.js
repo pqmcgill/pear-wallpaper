@@ -13,8 +13,8 @@ test('renders every item from snapshot.received', async () => {
     <Received snapshot={snapshot} setter={jest.fn()} getTarget={() => 'home'} />
   )
 
-  getByText('one.jpg')
-  getByText('two.jpg')
+  getByText(/one\.jpg/)
+  getByText(/two\.jpg/)
 })
 
 test('Reapply calls the setter directly with item.filePath and the current target — no bridge/markApplied involved', async () => {
@@ -42,4 +42,27 @@ test('a setter failure surfaces inline without throwing', async () => {
   await fireEvent.press(getAllByText('Re-apply')[0])
 
   await findByText('decode failed')
+})
+
+// #2: a row says who sent it and when, and never shows a path, including
+// the full paths old groups replicated before core basenamed them.
+test('rows show the sender\'s roster name, and only a basename of an old full path', async () => {
+  const appliedAt = Date.UTC(2026, 8, 25, 18, 30)
+  const withSenders = {
+    roster: [{ key: 'bb', name: 'Mom\'s phone' }],
+    received: [
+      { id: 'r1', fromKey: 'bb', filePath: '/f/one.png', appliedAt, meta: { filename: '/data/user/0/com.pearwallpaper.app/files/pear-wallpaper-staging/beach.png' } },
+      { id: 'r2', fromKey: 'gone', filePath: '/f/two.png', appliedAt, meta: { filename: null } }
+    ]
+  }
+  const { getByText, getAllByText, queryByText, toJSON } = await render(
+    <Received snapshot={withSenders} setter={jest.fn()} getTarget={() => 'home'} />
+  )
+
+  getByText('From Mom\'s phone')
+  getByText('From a removed device')
+  getByText(/beach\.png/)
+  expect(getAllByText(/2026/)).toHaveLength(2)
+  expect(JSON.stringify(toJSON())).not.toMatch(/pear-wallpaper-staging|com\.pearwallpaper/)
+  expect(queryByText('r2')).toBeNull()
 })

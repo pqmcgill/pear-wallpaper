@@ -1,8 +1,10 @@
 const test = require('brittle')
+const fs = require('fs')
+const path = require('path')
 const b4a = require('b4a')
 const { validateImage } = require('../lib/image.js')
 const WallpaperCore = require('../index.js')
-const { pairedDuo, until } = require('./helpers')
+const { pairedDuo, until, tmpDir } = require('./helpers')
 
 function fakePng(size = 4096) {
   const buf = b4a.alloc(size)
@@ -58,4 +60,34 @@ test('sendWallpaper: rejects unknown targets', async function (t) {
     () => creator.sendWallpaper(fakePng(), ['ab'.repeat(32)]),
     /not in the roster/
   )
+})
+
+// #2: meta.filename replicates to every member, so it must never carry the
+// sender's local path (username, folder names).
+test('sendWallpaper: meta.filename replicates only a basename, never the local path', async function (t) {
+  const { creator, joiner } = await pairedDuo(t)
+  const p = path.join(await tmpDir(t), 'Family Photos', 'beach.png')
+  fs.mkdirSync(path.dirname(p), { recursive: true })
+  fs.writeFileSync(p, fakePng())
+
+  const { id } = await creator.sendWallpaper(p, [joiner.deviceKey])
+  await until(joiner, 'update', async () => (await joiner.base.view.get(`send/${id}`)) !== null)
+  t.is((await joiner.base.view.get(`send/${id}`)).value.meta.filename, 'beach.png')
+})
+
+test('sendWallpaper: an explicit filename (or null) wins over the path, and is basenamed too', async function (t) {
+  const { creator, joiner } = await pairedDuo(t)
+  const staged = path.join(await tmpDir(t), '1787510958028-k3j9x0.png')
+  fs.writeFileSync(staged, fakePng())
+
+  const a = await creator.sendWallpaper(staged, [joiner.deviceKey], { filename: 'Grandma.png' })
+  const b = await creator.sendWallpaper(fakePng(), [joiner.deviceKey], { filename: 'C:\\Users\\me\\Pictures\\dog.jpg' })
+  const c = await creator.sendWallpaper(fakePng(), [joiner.deviceKey])
+  const d = await creator.sendWallpaper(staged, [joiner.deviceKey], { filename: null })
+  await until(joiner, 'update', async () => (await joiner.base.view.get(`send/${d.id}`)) !== null)
+  const meta = async (id) => (await joiner.base.view.get(`send/${id}`)).value.meta
+  t.is((await meta(a.id)).filename, 'Grandma.png')
+  t.is((await meta(b.id)).filename, 'dog.jpg')
+  t.is((await meta(c.id)).filename, null, 'a buffer with no filename sends none')
+  t.is((await meta(d.id)).filename, null, 'filename: null sends none, even for a path')
 })

@@ -1,6 +1,21 @@
 import { useState } from 'react'
 import { View, Text, Image, Pressable, StyleSheet } from 'react-native'
 
+function senderName (roster, key) {
+  const device = (roster || []).find((d) => d.key === key)
+  return device ? device.name : 'a removed device'
+}
+
+// Groups from before core basenamed meta.filename still replicate the
+// sender's full path.
+function baseName (filename) {
+  return filename ? filename.split(/[\\/]/).pop() : null
+}
+
+function when (ts) {
+  return new Date(ts).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+}
+
 // Port of desktop/ui/components/Received.js, with the one deliberate
 // divergence the brief calls out: desktop's Reapply goes over the bridge
 // (`bridge.call('reapply', id)`, bridge-main.js), because the platform
@@ -26,15 +41,21 @@ export function Received ({ snapshot, setter, getTarget }) {
 
   return (
     <View style={styles.section}>
-      {(snapshot.received || []).map((r) => (
-        <View style={styles.row} key={r.id}>
-          <Image source={{ uri: 'file://' + r.filePath }} style={styles.thumb} />
-          <Text style={styles.rowText}>{(r.meta && r.meta.filename) || r.id}</Text>
-          <Pressable onPress={() => reapply(r)}>
-            <Text style={styles.action}>Re-apply</Text>
-          </Pressable>
-        </View>
-      ))}
+      {(snapshot.received || []).map((r) => {
+        const name = baseName(r.meta && r.meta.filename)
+        return (
+          <View style={styles.row} key={r.id}>
+            <Image source={{ uri: 'file://' + r.filePath }} style={styles.thumb} />
+            <View style={styles.rowText}>
+              <Text style={styles.from}>From {senderName(snapshot.roster, r.fromKey)}</Text>
+              <Text style={styles.detail}>{when(r.appliedAt)}{name ? ' · ' + name : ''}</Text>
+            </View>
+            <Pressable onPress={() => reapply(r)}>
+              <Text style={styles.action}>Re-apply</Text>
+            </Pressable>
+          </View>
+        )
+      })}
       {reapplyError && <Text style={styles.error}>{reapplyError}</Text>}
     </View>
   )
@@ -45,6 +66,8 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   thumb: { width: 60, height: 60, marginRight: 12 },
   rowText: { flex: 1 },
+  from: { fontWeight: '600' },
+  detail: { color: '#555' },
   action: { marginLeft: 12, color: 'blue' },
   error: { marginTop: 12, color: 'crimson' }
 })

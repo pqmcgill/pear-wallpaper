@@ -149,8 +149,26 @@ test('toggling one target and pressing Send calls sendWallpaper with only that k
 
   expect(bridge.call).toHaveBeenCalledWith('sendWallpaper', {
     filePath: '/staged/photo.png',
-    targets: ['device-b']
+    targets: ['device-b'],
+    filename: null
   })
+})
+
+// #2: the staged path's generated name must not stand in for a real one.
+test('Send passes the share\'s display name, or null when there is none', async () => {
+  const bridge = fakeBridge()
+  const { getByText, getAllByRole, unmount } = await render(
+    <SendScreen bridge={bridge} snapshot={snapshot} filePath="/staged/1-abc.png" filename="beach.png" />
+  )
+  await fireEvent(getAllByRole('switch')[0], 'valueChange', true)
+  await fireEvent.press(getByText('Send'))
+  expect(bridge.call).toHaveBeenLastCalledWith('sendWallpaper', expect.objectContaining({ filename: 'beach.png' }))
+  await unmount()
+
+  const again = await render(<SendScreen bridge={bridge} snapshot={snapshot} filePath="/staged/1-abc.png" />)
+  await fireEvent(again.getAllByRole('switch')[0], 'valueChange', true)
+  await fireEvent.press(again.getByText('Send'))
+  expect(bridge.call).toHaveBeenLastCalledWith('sendWallpaper', expect.objectContaining({ filename: null }))
 })
 
 test('a successful send calls onSent', async () => {

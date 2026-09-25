@@ -37,6 +37,6 @@ Preconditions:
 - On a second send to the same device, `pw wait a "Delivered"` passes at once on the previous entry in `Recently sent`. Prove the new send landed with `pw state b` (one more `received[]` item) or the wallpaper hash.
 - Never click the dropzone label: it opens a native macOS dialog that CDP can't drive. Use `pw file`. Drag-and-drop (`send-pick-drop`) can't be driven with pw. Report it as unverified.
 - Both instances are on the same Mac, so an A→B send changes **your** desktop. Both instances apply to the same screen, so for B→A the proof is the path pointing into `userdata/a/received/`.
-- The receiver's `meta.filename` (shown in its Received tab) is the sender's full absolute path (issue #2). Treat this as a product finding, not a verification failure.
+- The receiver's `meta.filename` is only the basename of the sender's file (issue #2). A full path in `pw state b` is a regression.
 - The first-ever osascript call prompts for macOS Automation permission. If `delivered` never appears, check `.verify-runs/<run>/logs/b.log` for an osascript error.
 - Verified live on 2026-09-25, twice (the initial run and the maintenance pass): browse path, A→B, `pending` then `delivered`, hashes matched. This was the first real smoke of the `webUtils.getPathForFile` fix that `qa-desktop.md` flags.

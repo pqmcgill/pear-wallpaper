@@ -20,6 +20,13 @@ const INVITE_TTL_MS = 24 * 60 * 60 * 1000
 
 function noop() {}
 
+// meta.filename replicates to every member, so only the last path segment
+// ever leaves this device.
+function baseName(name) {
+  if (typeof name !== 'string') return null
+  return name.split(/[\\/]/).pop() || null
+}
+
 // Run `run` at most once at a time. A call that arrives while one is in
 // flight marks the gate dirty, and the sweep runs once more when it
 // finishes, so an op that landed mid-sweep is picked up right away instead
@@ -299,7 +306,7 @@ class WallpaperCore extends ReadyResource {
     return out
   }
 
-  async sendWallpaper(image, targets) {
+  async sendWallpaper(image, targets, { filename = typeof image === 'string' ? image : null } = {}) {
     if (this.base === null) throw new Error('not in a group')
     if (!Array.isArray(targets) || targets.length === 0) throw new Error('targets required')
     const buffer = typeof image === 'string' ? await fs.promises.readFile(image) : image
@@ -312,7 +319,7 @@ class WallpaperCore extends ReadyResource {
       from: this.deviceKey,
       targets,
       blob,
-      meta: { ext, byteLength: buffer.byteLength, filename: typeof image === 'string' ? image : null }
+      meta: { ext, byteLength: buffer.byteLength, filename: baseName(filename) }
     })
     await this._append(op)
     return { id: op.id }

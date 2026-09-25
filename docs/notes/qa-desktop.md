@@ -142,7 +142,7 @@ the send never reaches `delivered`.
 
 Confirm: **B's desktop wallpaper changes** to the sent image.
 
-**On A**, Send tab: the target row for B flips to **`delivered`** (from
+**On A**, Send tab: B's line under **Recently sent** flips to **Delivered** (from
 `snapshot.sends[].targets[].status`, pushed by the worker's `state` event
 after the `send-updated` core event).
 
@@ -150,7 +150,7 @@ after the `send-updated` core event).
 
 Repeat Act 3 in the other direction. A's Automation prompt is separate from
 B's — expect it fresh on A's first send if A has never sent before. Confirm
-A's wallpaper changes and B's Send tab shows the delivered flip.
+A's wallpaper changes and B's Send tab shows the Delivered flip.
 
 ## Act 5 — osascript/launchctl under the Bare worker (MUST-SMOKE, carried from Task 3)
 

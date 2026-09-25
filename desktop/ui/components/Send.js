@@ -2,6 +2,7 @@ import { h } from 'preact'
 import { useState } from 'preact/hooks'
 import htm from 'htm'
 import { Presence } from './Presence.js'
+import { Sent } from './Sent.js'
 const html = htm.bind(h)
 
 // CONFLICT-3 ruling (progress.md): no `pickImage` bridge command exists.
@@ -78,19 +79,6 @@ export function Send ({ bridge, snapshot }) {
       setSendError(err.message)
     }
   }
-  const statusFor = (key) => {
-    for (const s of snapshot.sends || []) {
-      const tr = s.targets.find((tt) => tt.key === key)
-      if (tr) return tr.status
-    }
-    return null
-  }
-  const statusText = (d) => {
-    const status = statusFor(d.key)
-    if (status === 'pending' && !d.online) return `Waiting for ${d.name} to come online`
-    return status || ''
-  }
-
   return html`
     <section class="send" onDragOver=${(e) => e.preventDefault()} onDrop=${onDrop}>
       <label class="dropzone">
@@ -103,10 +91,10 @@ export function Send ({ bridge, snapshot }) {
             <label><input type="checkbox" checked=${!!targets[d.key]}
               onChange=${(e) => setTargets({ ...targets, [d.key]: e.target.checked })} /> ${d.name}</label>
             <${Presence} online=${d.online} />
-            <span class="status">${statusText(d)}</span>
           </li>`)}
       </ul>
       <button disabled=${!filePath || chosen.length === 0} onClick=${send}>Send</button>
       ${sendError && html`<p class="error">${sendError}</p>`}
+      <${Sent} snapshot=${snapshot} />
     </section>`
 }

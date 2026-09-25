@@ -2,8 +2,8 @@ import { View, Text, StyleSheet } from 'react-native'
 
 // The sender's view of snapshot.sends (core's listSends: this device's own
 // sends, newest first, each target with a delivery status). Desktop shows
-// the same statuses beside each target on its Send tab. Android's Send
-// screen is transient (reached from the share sheet), so they live here.
+// the same list, in the same words, under its Send tab. Android's Send
+// screen is transient (reached from the share sheet), so it lives here.
 const STATUS = {
   pending: 'Not delivered yet',
   delivered: 'Delivered',

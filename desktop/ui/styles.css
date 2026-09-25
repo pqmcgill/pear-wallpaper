@@ -2,3 +2,7 @@
 .presence .dot { width: 8px; height: 8px; border-radius: 50%; background: #999; }
 .presence.on .dot { background: #1f9d45; }
 .send .status { margin-left: 8px; }
+.send .sent ul { list-style: none; padding-left: 0; }
+.send .sent li li { padding-left: 16px; }
+.send .sent .when { margin-left: 8px; font-size: 0.85em; color: #555; }
+.send .sent .status.delivered { color: #1f9d45; }

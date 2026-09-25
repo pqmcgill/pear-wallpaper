@@ -317,6 +317,12 @@ class WallpaperCore extends ReadyResource {
     return out
   }
 
+  // The same read and check sendWallpaper runs, so a shell can refuse a
+  // file when it is picked instead of after Send. Needs no group.
+  async checkImage(image) {
+    return validateImage(typeof image === 'string' ? await fs.promises.readFile(image) : image)
+  }
+
   async sendWallpaper(image, targets, { filename = typeof image === 'string' ? image : null } = {}) {
     if (this.base === null) throw new Error('not in a group')
     if (!Array.isArray(targets) || targets.length === 0) throw new Error('targets required')

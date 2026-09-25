@@ -2,7 +2,7 @@ import { h } from 'preact'
 import { useState } from 'preact/hooks'
 import htm from 'htm'
 import { Presence } from './Presence.js'
-import { Sent } from './Sent.js'
+import { Sent, fileName } from './Sent.js'
 const html = htm.bind(h)
 
 // CONFLICT-3 ruling (progress.md): no `pickImage` bridge command exists.
@@ -44,6 +44,16 @@ export function resolveFilePath (file) {
   return null
 }
 
+// Core's own check runs on the pick, so a file it can't send (an iPhone
+// HEIC, a renamed file, one over the size cap) is refused now, not after
+// the user has chosen devices and pressed Send.
+export async function checkPick (bridge, file) {
+  const filePath = resolveFilePath(file)
+  if (!filePath) throw new Error('Could not read a path for that file. Try a different file, or drag it in instead of browsing (or vice versa).')
+  await bridge.call('checkImage', { filePath })
+  return filePath
+}
+
 export function Send ({ bridge, snapshot }) {
   const [filePath, setFilePath] = useState(null)
   const [targets, setTargets] = useState({})
@@ -52,12 +62,13 @@ export function Send ({ bridge, snapshot }) {
   const chosen = Object.keys(targets).filter((k) => targets[k])
 
   const pickFile = async (f) => {
-    const p = await resolveFilePath(f)
-    if (p) {
+    try {
+      const p = await checkPick(bridge, f)
       setSendError(null)
       setFilePath(p)
-    } else {
-      setSendError('Could not read a path for that file. Try a different file, or drag it in instead of browsing (or vice versa).')
+    } catch (err) {
+      setFilePath(null)
+      setSendError(err.message)
     }
   }
   const onDrop = (e) => {
@@ -82,8 +93,8 @@ export function Send ({ bridge, snapshot }) {
   return html`
     <section class="send" onDragOver=${(e) => e.preventDefault()} onDrop=${onDrop}>
       <label class="dropzone">
-        ${filePath || 'Drop an image here, or click to browse'}
-        <input type="file" accept="image/*" onChange=${onFileInput} style="display:none" />
+        ${filePath ? fileName(filePath) : 'Drop a JPEG, PNG or WebP picture here, or click to browse'}
+        <input type="file" accept="image/jpeg,image/png,image/webp" onChange=${onFileInput} style="display:none" />
       </label>
       <ul>
         ${targetable.map((d) => html`

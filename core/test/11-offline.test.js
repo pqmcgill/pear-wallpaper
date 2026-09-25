@@ -66,7 +66,7 @@ test('sync: first-update floor waits past the quiet window for in-flight replica
 // I2 regression. sync() is the Android shell's ONLY receive opportunity.
 // A single blob nobody can serve used to eat the whole budget: relay ran
 // before the receive step, and both steps were silently skipped whenever a
-// prior update-driven sweep was still in flight (_relaying / _applyBusy).
+// prior update-driven sweep was still in flight (the relay and receive gates).
 // Here the joiner's event-driven receive sweep is deliberately wedged on an
 // unfetchable blob (30s bound) before a perfectly fetchable wallpaper
 // arrives — only sync() can deliver it.
@@ -83,7 +83,7 @@ test('sync: an unfetchable blob does not starve the receive step', async functio
   })
   await creator._append(stuck)
   await until(joiner, 'update', async () => (await joiner.base.view.get(k.send(stuck.id))) !== null)
-  await until(joiner, 'update', () => joiner._applyBusy === true, 5000)
+  await until(joiner, 'update', () => joiner._receiveGate.busy === true, 5000)
 
   let got = null
   joiner.on('wallpaper', (entry) => { got = entry })

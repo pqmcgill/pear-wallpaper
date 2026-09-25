@@ -266,12 +266,15 @@ class WallpaperCore extends ReadyResource {
     if (this.base === null) return []
     const out = []
     for await (const node of this.base.view.createReadStream({ gte: 'device/', lt: 'device0' })) {
+      const isSelf = node.value.key === this.deviceKey
       out.push({
         key: node.value.key,
         name: node.value.name,
-        isSelf: node.value.key === this.deviceKey,
+        isSelf,
         isCreator: node.value.isCreator,
-        online: this._isOnline(node.value.swarmKey)
+        // The swarm never holds a connection to itself, so self would
+        // otherwise always read offline.
+        online: isSelf || this._isOnline(node.value.swarmKey)
       })
     }
     return out

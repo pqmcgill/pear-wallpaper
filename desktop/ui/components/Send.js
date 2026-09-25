@@ -1,6 +1,7 @@
 import { h } from 'preact'
 import { useState } from 'preact/hooks'
 import htm from 'htm'
+import { Presence } from './Presence.js'
 const html = htm.bind(h)
 
 // CONFLICT-3 ruling (progress.md): no `pickImage` bridge command exists.
@@ -84,6 +85,11 @@ export function Send ({ bridge, snapshot }) {
     }
     return null
   }
+  const statusText = (d) => {
+    const status = statusFor(d.key)
+    if (status === 'pending' && !d.online) return `Waiting for ${d.name} to come online`
+    return status || ''
+  }
 
   return html`
     <section class="send" onDragOver=${(e) => e.preventDefault()} onDrop=${onDrop}>
@@ -96,7 +102,8 @@ export function Send ({ bridge, snapshot }) {
           <li key=${d.key}>
             <label><input type="checkbox" checked=${!!targets[d.key]}
               onChange=${(e) => setTargets({ ...targets, [d.key]: e.target.checked })} /> ${d.name}</label>
-            <span class="status">${statusFor(d.key) || ''}</span>
+            <${Presence} online=${d.online} />
+            <span class="status">${statusText(d)}</span>
           </li>`)}
       </ul>
       <button disabled=${!filePath || chosen.length === 0} onClick=${send}>Send</button>

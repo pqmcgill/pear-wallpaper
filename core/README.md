@@ -111,7 +111,9 @@ await core.ready()
   Datasource for the send-target picker and device management. `[]`
   before this device has joined/created a group. `isCreator` is
   derived from the log (the first-ever `add-device` author), never
-  self-reported by the device row.
+  self-reported by the device row. `online` is true for this device
+  itself, and for another device while this device holds a swarm
+  connection to it.
 
 - **`await core.removeDevice(key: string): Promise<void>`**
   Revocation. Creator-only — throws `'only the creator can remove

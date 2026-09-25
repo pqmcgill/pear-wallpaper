@@ -1,0 +1,4 @@
+.presence { display: inline-flex; align-items: center; gap: 4px; margin: 0 8px; font-size: 0.85em; color: #555; }
+.presence .dot { width: 8px; height: 8px; border-radius: 50%; background: #999; }
+.presence.on .dot { background: #1f9d45; }
+.send .status { margin-left: 8px; }

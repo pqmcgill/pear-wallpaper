@@ -2,6 +2,7 @@ import { h } from 'preact'
 import { useState, useEffect } from 'preact/hooks'
 import htm from 'htm'
 import { qrSvg } from '../qr.js'
+import { Presence } from './Presence.js'
 const html = htm.bind(h)
 
 export function InviteCard ({ invite }) {
@@ -62,8 +63,8 @@ export function DeviceList ({ bridge, snapshot, candidates }) {
       <ul>
         ${snapshot.roster.map((d) => html`
           <li key=${d.key}>
-            <span class="dot ${d.online ? 'on' : 'off'}"></span>
             ${d.name} ${d.isSelf ? '(this device)' : ''} ${d.isCreator ? '· creator' : ''}
+            <${Presence} online=${d.online} />
             ${amCreator && !d.isSelf && html`<button onClick=${() => onRemove(d.key)}>Remove</button>`}
           </li>`)}
       </ul>

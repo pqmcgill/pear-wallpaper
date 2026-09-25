@@ -3,11 +3,10 @@ import { render, act } from '@testing-library/react-native'
 // app/_layout.js's share-intent effect (Task 8) is the focus here: does a
 // throwing stageSharedImage() degrade to the error banner instead of
 // crashing the app or navigating to /send with nothing staged? Every other
-// dependency _layout.js pulls in (worklet-client, apply-controller, the
-// native setter, settings, background-sync, expo-task-manager,
-// expo-background-task) is mocked wholesale, the same "only the surface
-// under test is real" idiom background-sync.test.js uses for
-// worklet-client — none of that machinery is what this test exercises.
+// dependency _layout.js pulls in (worklet-client, background-sync,
+// expo-task-manager, expo-background-task) is mocked wholesale — none of
+// that machinery is what this test exercises (worklet-lifecycle.test.js
+// mounts Layout against the real worklet-client).
 const mockRouterReplace = jest.fn()
 jest.mock('expo-router', () => {
   const { useContext: useCtx } = require('react')
@@ -40,15 +39,11 @@ jest.mock('expo-background-task', () => ({
 }))
 jest.mock('../lib/background-sync', () => ({ runBoundedSyncRound: jest.fn() }))
 
+const mockBridge = { call: jest.fn(() => Promise.resolve({})), on: jest.fn(), applyPending: jest.fn() }
 jest.mock('../lib/worklet-client', () => ({
-  getBridge: jest.fn(() => ({ call: jest.fn(() => Promise.resolve({})), on: jest.fn() })),
+  getBridge: jest.fn(() => mockBridge),
   getWorklet: jest.fn(() => null)
 }))
-jest.mock('../lib/apply-controller', () => ({
-  createApplyController: jest.fn(() => ({ applyPending: jest.fn() }))
-}))
-jest.mock('../modules/wallpaper-setter', () => ({ setWallpaper: jest.fn() }))
-jest.mock('../lib/settings', () => ({ getTarget: jest.fn(() => 'home') }))
 
 const mockStageSharedImage = jest.fn()
 jest.mock('../lib/share-target', () => ({
@@ -106,13 +101,12 @@ test('the shared file\'s display name travels to /send with the staged path', as
   })
 })
 
-test('a failed wallpaper apply reaches the error banner', async () => {
+test("a bridge 'error' event (how worklet-client reports a failed wallpaper apply) reaches the error banner", async () => {
   mockShareIntentState = { hasShareIntent: false, shareIntent: {}, resetShareIntent: mockResetShareIntent }
-  const { createApplyController } = require('../lib/apply-controller')
 
   const { findByText } = await render(<Layout />)
-  const { onError } = createApplyController.mock.calls[0][0]
-  await act(async () => onError(new Error('WallpaperManager.setStream returned 0')))
+  const [, onError] = mockBridge.on.mock.calls.find(([event]) => event === 'error')
+  await act(async () => onError({ message: "Couldn't set the new wallpaper: WallpaperManager.setStream returned 0" }))
 
   await findByText(/Couldn't set the new wallpaper/)
 })

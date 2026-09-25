@@ -1,8 +1,8 @@
-// Task 9: the bounded background round — driven headless from
-// expo-task-manager, never concurrent with the resident worklet
-// (single-writer corestore). Mocks react-native-bare-kit the same way
-// worklet-client.test.js does; mocks the native setter and settings so
-// this runs under plain jest with no native modules.
+// The bounded background round, driven headless from expo-task-manager,
+// against the real worklet-client.js (the single-writer enforcement point).
+// Mocks react-native-bare-kit the same way worklet-client.test.js does;
+// mocks the native setter and settings so this runs under plain jest with
+// no native modules.
 jest.mock('react-native-bare-kit', () => {
   const { EventEmitter } = require('events')
   const instances = []
@@ -28,18 +28,13 @@ jest.mock('../app/gen/worklet.bundle.mjs', () => ({ __esModule: true, default: '
 jest.mock('../modules/wallpaper-setter', () => ({ setWallpaper: jest.fn(async () => true) }))
 jest.mock('../lib/settings', () => ({ getTarget: jest.fn(() => 'home') }))
 
-// worklet-client.js is mocked wholesale here (unlike worklet-client.test.js,
-// which tests the real module) — background-sync.js only needs its
-// isActive()/getBridge() surface, and the guard test specifically wants
-// isActive() controllable independent of any real Worklet lifecycle.
-jest.mock('../lib/worklet-client', () => ({
-  isActive: jest.fn(() => false),
-  getBridge: jest.fn()
-}))
-
 beforeEach(() => {
   jest.resetModules()
   jest.clearAllMocks()
+})
+
+afterEach(() => {
+  jest.useRealTimers()
 })
 
 function sendFrame (ipc, msg) {
@@ -48,6 +43,10 @@ function sendFrame (ipc, msg) {
 
 function readWritten (ipc, index) {
   return JSON.parse(ipc.written[index])
+}
+
+function frames (worklet, type) {
+  return worklet.IPC.written.map((s) => JSON.parse(s)).filter((m) => m.t === type)
 }
 
 // Polls microtasks until any newly-written 'req' frames appear, answering
@@ -61,6 +60,18 @@ async function answerReqs (worklet, handler) {
       const req = readWritten(worklet.IPC, worklet._answered)
       worklet._answered++
       if (req.t === 'req') handler(req, worklet)
+    }
+  }
+}
+
+function answerRound (items) {
+  return (req, worklet) => {
+    if (req.cmd === 'syncNow') {
+      sendFrame(worklet.IPC, { t: 'res', id: req.id, ok: true, value: null })
+    } else if (req.cmd === 'pendingWallpaper') {
+      sendFrame(worklet.IPC, { t: 'res', id: req.id, ok: true, value: items.shift() || null })
+    } else if (req.cmd === 'markApplied') {
+      sendFrame(worklet.IPC, { t: 'res', id: req.id, ok: true, value: true })
     }
   }
 }
@@ -81,29 +92,17 @@ test('a fresh round: init, ready, syncNow, drains pending via setter+markApplied
 
   sendFrame(w.IPC, { t: 'evt', event: 'ready', payload: {} })
 
-  const items = [{ id: 'a', filePath: '/f/a.png' }]
-  await answerReqs(w, (req, worklet) => {
-    if (req.cmd === 'syncNow') {
-      sendFrame(worklet.IPC, { t: 'res', id: req.id, ok: true, value: null })
-    } else if (req.cmd === 'pendingWallpaper') {
-      sendFrame(worklet.IPC, { t: 'res', id: req.id, ok: true, value: items.shift() || null })
-    } else if (req.cmd === 'markApplied') {
-      sendFrame(worklet.IPC, { t: 'res', id: req.id, ok: true, value: true })
-    }
-  })
+  await answerReqs(w, answerRound([{ id: 'a', filePath: '/f/a.png' }]))
 
-  // Advance the bounded shutdown-linger timer inside runBoundedSyncRound.
+  // Advance the bounded shutdown-linger timer inside release().
   await jest.advanceTimersByTimeAsync(2000)
 
   const result = await roundPromise
   expect(result).toBe('synced')
   expect(setWallpaper).toHaveBeenCalledWith('/f/a.png', 'home')
 
-  const frames = w.IPC.written.map((s) => JSON.parse(s))
-  expect(frames.find((m) => m.t === 'shutdown')).toBeTruthy()
+  expect(frames(w, 'shutdown')).toHaveLength(1)
   expect(w.terminated).toBe(true)
-
-  jest.useRealTimers()
 })
 
 test('init failure (terminal error before ready) rejects the round AND still terminates the worklet (bounded shutdown runs on every exit path)', async () => {
@@ -120,14 +119,12 @@ test('init failure (terminal error before ready) rejects the round AND still ter
   const w = __instances[0]
   sendFrame(w.IPC, { t: 'evt', event: 'error', payload: { message: 'init failed: boom' } })
 
-  // The outer try/finally's bounded shutdown-linger timer still has to
-  // elapse before terminate() fires, even on this failure path.
+  // release()'s bounded shutdown-linger timer still has to elapse before
+  // terminate() fires, even on this failure path.
   await jest.advanceTimersByTimeAsync(2000)
 
   await assertion
   expect(w.terminated).toBe(true)
-
-  jest.useRealTimers()
 })
 
 test('a worklet that never emits ready or error times out (bounded, does not hang forever) and still terminates', async () => {
@@ -145,33 +142,25 @@ test('a worklet that never emits ready or error times out (bounded, does not han
 
   await assertion
   expect(w.terminated).toBe(true)
-
-  const frames = w.IPC.written.map((s) => JSON.parse(s))
-  expect(frames.find((m) => m.t === 'shutdown')).toBeTruthy()
-
-  jest.useRealTimers()
+  expect(frames(w, 'shutdown')).toHaveLength(1)
 })
 
-test('guard: when the resident worklet isActive(), the round nudges it instead of constructing a Worklet', async () => {
-  const workletClient = require('../lib/worklet-client')
-  workletClient.isActive.mockReturnValue(true)
-  const calls = []
-  const fakeBridge = {
-    call: jest.fn(async (cmd, ...args) => {
-      calls.push([cmd, ...args])
-      if (cmd === 'pendingWallpaper') return null
-      return true
-    })
-  }
-  workletClient.getBridge.mockReturnValue(fakeBridge)
-
+test('single-writer rule: when the resident worklet is live, the round nudges it over the same IPC instead of constructing a second Worklet, and leaves it running', async () => {
+  const { setWallpaper } = require('../modules/wallpaper-setter')
+  const { getBridge } = require('../lib/worklet-client')
   const { runBoundedSyncRound } = require('../lib/background-sync')
   const { __instances } = require('react-native-bare-kit')
 
-  const result = await runBoundedSyncRound()
+  getBridge() // the app is alive
+  const w = __instances[0]
+  sendFrame(w.IPC, { t: 'evt', event: 'ready', payload: {} })
 
-  expect(result).toBe('nudged-resident')
-  expect(__instances).toHaveLength(0) // no second Worklet constructed
-  expect(calls.some((c) => c[0] === 'syncNow')).toBe(true)
-  expect(calls.some((c) => c[0] === 'pendingWallpaper')).toBe(true)
+  const roundPromise = runBoundedSyncRound()
+  await answerReqs(w, answerRound([{ id: 'a', filePath: '/f/a.png' }]))
+
+  expect(await roundPromise).toBe('nudged-resident')
+  expect(__instances).toHaveLength(1)
+  expect(setWallpaper).toHaveBeenCalledWith('/f/a.png', 'home')
+  expect(frames(w, 'shutdown')).toHaveLength(0)
+  expect(w.terminated).toBe(false)
 })

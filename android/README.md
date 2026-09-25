@@ -28,18 +28,22 @@ RN UI (React, expo-router: app/, components/)        ~ desktop's renderer
 in the shared `../bridge` package (`pear-wallpaper-bridge`) — Android and
 desktop consume the exact same protocol code, only the transport adapter
 and the process-vs-thread hosting differ. `lib/worklet-client.js` is the
-RN-side singleton that starts the one Worklet this app is ever allowed to
-have open on a given `storageDir` (the single-writer rule — see its
-comments and `lib/background-sync.js`'s `isActive()` guard).
+only module that starts a Worklet, and it keeps at most one open on a
+given `storageDir` (the single-writer rule): the UI claims it through
+`getBridge()`, a background round leases it through `leaseWorklet()` and
+hands it over instead of shutting it down if the app opened mid-round
+(see its comments and `lib/background-sync.js`).
 
 **The apply-flow inversion.** On desktop, the Bare worker runs the OS
 wallpaper setter itself. On Android, `WallpaperManager` can only be
 called from RN/Kotlin, not from inside the worklet's Bare thread. So the
 protocol runs backwards here: the worklet surfaces a `wallpaper` event and
 a `pendingWallpaper` command instead of applying anything itself;
-`lib/apply-controller.js` (RN side) polls/reacts, calls the native
-`setWallpaper` (via the local `modules/wallpaper-setter/` Expo Module),
-and acks with `markApplied` on success. A failed apply is simply left
+`lib/apply-controller.js` (RN side, one controller per worklet, exposed as
+the bridge handle's `applyPending()` so UI pushes and background nudges
+coalesce) calls the native `setWallpaper` (via the local
+`modules/wallpaper-setter/` Expo Module), and acks with `markApplied` on
+success. A failed apply is simply left
 unacked — core's existing retry-next-sync contract, same as desktop,
 just enforced one layer further out. The failure also goes to the error
 banner, as desktop's does.

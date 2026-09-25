@@ -2,11 +2,7 @@ import { h, render } from 'preact'
 import htm from 'htm'
 import { createBridgeUi } from 'pear-wallpaper-bridge/ui'
 import { createElectronTransport } from './electron-ipc.js'
-import { ErrorBanner } from './components/ErrorBanner.js'
-import { Onboarding } from './components/Onboarding.js'
-import { Waiting } from './components/Waiting.js'
-// Main window (Task 9-11 components) imported here as they land:
-import { MainView } from './components/MainView.js'
+import { AppView } from './components/AppView.js'
 const html = htm.bind(h)
 
 // Electron conversion (Task 1): the renderer transport is now
@@ -17,23 +13,23 @@ const html = htm.bind(h)
 // bundler, so browser ESM cannot import a CJS module from lib/ (there is
 // no named-import interop without a bundler) — see ./electron-ipc.js.
 const bridge = createBridgeUi(createElectronTransport(window.bridgeTransport))
-let snapshot = { groupStatus: 'none', roster: [], sends: [], received: [] }
+let snapshot = { groupStatus: null, roster: [], sends: [], received: [] }
+let worker = 'running'
 
 function dismissError () { snapshot = { ...snapshot, lastError: null }; draw() }
+function retryWorker () {
+  bridge.call('restartWorker').catch((err) => { snapshot = { ...snapshot, lastError: err.message }; draw() })
+}
 
-function routedView () {
-  if (snapshot.groupStatus === 'joining') return html`<${Waiting} snapshot=${snapshot} />`
-  if (snapshot.groupStatus === 'member') return html`<${MainView} bridge=${bridge} snapshot=${snapshot} />`
-  return html`<${Onboarding} bridge=${bridge} />`
+function draw () {
+  render(html`<${AppView} bridge=${bridge} snapshot=${snapshot} worker=${worker}
+    onRetry=${retryWorker} onDismissError=${dismissError} />`, document.getElementById('app'))
 }
-function App () {
-  return html`
-    <div class="app-root">
-      ${snapshot.lastError && html`<${ErrorBanner} message=${snapshot.lastError} onDismiss=${dismissError} />`}
-      ${routedView()}
-    </div>`
+
+function loadState () {
+  bridge.call('getState').then((s) => { snapshot = { ...snapshot, ...s }; draw() })
+    .catch((err) => { snapshot = { ...snapshot, lastError: err.message }; draw() })
 }
-function draw () { render(h(App, {}), document.getElementById('app')) }
 
 bridge.on('state', (s) => { snapshot = { ...snapshot, ...s }; draw() })
 // The bridge's 'error' event is {message} only — engine/apply/auto-resume
@@ -61,8 +57,20 @@ bridge.on('error', (e) => {
 // it never reaches the worker).
 bridge.on('update-ready', () => { snapshot = { ...snapshot, updateReady: true }; draw() })
 
-bridge.call('getState').then((s) => { snapshot = { ...snapshot, ...s }; draw() })
-  .catch((err) => { snapshot = { ...snapshot, lastError: err.message }; draw() })
+// main.js pushes the worker's status on every change and on each page load.
+// Replies to requests the dead worker held will never come, and a new
+// worker's state may differ from the last snapshot, so re-fetch on 'running'.
+bridge.on('worker', ({ status }) => {
+  if (status !== 'running') bridge.failPending(new Error('Pear Wallpaper is restarting. Try again in a moment.'))
+  else {
+    if (worker !== 'running') snapshot = { ...snapshot, lastError: null }
+    loadState()
+  }
+  worker = status
+  draw()
+})
+
+loadState()
 draw()
 
 // Tray moved to main.js (main-process concern under Electron) — Task 4.

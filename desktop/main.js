@@ -3,6 +3,7 @@ const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, powerMonitor } = r
 const path = require('path')
 const PearRuntime = require('pear-runtime')
 const pkg = require('./package.json')
+const { createWorkerSupervisor } = require('./lib/worker-supervisor.js')
 
 // Single instance: a second launch should focus the existing window instead
 // of spawning a second worker/core alongside the first. Must be checked
@@ -28,6 +29,8 @@ function createWindow () {
     }
   })
   win.loadFile('ui/index.html')
+  // A reloaded or reopened renderer missed earlier status pushes.
+  win.webContents.on('did-finish-load', () => sendWorkerStatus())
   // Close-to-tray: hitting the window's close button hides it instead of
   // quitting (the worker/core keep running in the background, reachable via
   // the tray). Only a real quit (tray "Quit" -> app.isQuitting = true, see
@@ -42,14 +45,13 @@ function createWindow () {
 // directly to the worker over the same newline-JSON framing the relay
 // below uses to speak bridge frames to/from the worker; -1 as the frame id
 // is fine here since nothing in main.js correlates replies to requests (it
-// only relays worker->renderer frames verbatim, see the workerPipe 'data'
-// handler).
+// only relays worker->renderer frames verbatim, see lib/worker-supervisor.js).
 let tray = null
 function createTray () {
   tray = new Tray(nativeImage.createFromPath(path.join(__dirname, 'ui', 'trayTemplate.png')))
   const menu = Menu.buildFromTemplate([
     { label: 'Open Pear Wallpaper', click: () => { if (win) { win.show(); win.focus() } else createWindow() } },
-    { label: 'Sync now', click: () => { if (workerPipe) workerPipe.write(Buffer.from(JSON.stringify({ t: 'req', id: -1, cmd: 'syncNow', args: [] }) + '\n')) } },
+    { label: 'Sync now', click: () => { if (worker) worker.write({ t: 'req', id: -1, cmd: 'syncNow', args: [] }) } },
     { type: 'separator' },
     // Quit is handled entirely here: set the flag so close-to-tray/before-quit
     // let it through, then app.quit() triggers the before-quit handler below
@@ -72,7 +74,7 @@ function createTray () {
 // subprocess running the platform's bundled `bare` binary
 // (node_modules/bare-sidecar/prebuilds/<platform>/bare), wired to an fd-3
 // IPC pipe. `PearRuntime.run()` returns that pipe as a Duplex stream
-// (`workerPipe`); on the worker side, bare-sidecar's own bootstrap
+// (lib/worker-supervisor.js owns it); on the worker side, bare-sidecar's own bootstrap
 // (node_modules/bare-sidecar/lib/runtime.js) puts the other end on the
 // global `Bare.IPC` before loading worker/core-host.js. Confirmed via a
 // standalone Node smoke harness (see task-2-report.md) — this is not
@@ -85,7 +87,13 @@ function createTray () {
 // deferred to `app.whenReady()` (moved out of module top-level from Task 2 —
 // a lifecycle nit from that task's review: this way a failed
 // `createWindow()` can't leave an orphaned worker process behind it).
-let workerPipe = null
+let worker = null
+
+// The renderer shows "Starting…" while restarting and a retry screen once
+// failed, and rejects its in-flight calls whenever the worker goes down.
+function sendWorkerStatus () {
+  if (win && worker) win.webContents.send('bridge:to-renderer', { t: 'evt', event: 'worker', payload: { status: worker.status } })
+}
 
 // OTA (Task 6): `pear.updater` is a SEPARATE capability of the same
 // pear-runtime@1.3.1 package from the static `PearRuntime.run()` used
@@ -138,7 +146,7 @@ function getAppBundlePath () {
 // it. Routed through the *same* `bridge.call('restartToUpdate')` surface
 // Settings.js already uses for other calls (see the `ipcMain.on(
 // 'bridge:to-main', ...)` handler below, which intercepts this one cmd
-// before it would otherwise be forwarded verbatim to workerPipe) rather
+// before it would otherwise be forwarded verbatim to the worker) rather
 // than adding a second ipcRenderer channel/preload method — one relay to
 // reason about, and Settings.js's existing `bridge.call(...)` pattern
 // (see setLoginAtLogin) is reused unchanged.
@@ -161,22 +169,13 @@ app.whenReady().then(() => {
   const storageDir = app.getPath('userData')
   const exePath = app.getPath('exe')
 
-  workerPipe = PearRuntime.run(path.join(__dirname, 'worker/core-host.js'), [storageDir, exePath])
-  workerPipe.on('error', (err) => console.error('[pear-wallpaper] worker pipe error', err))
-  workerPipe.on('exit', (code, status) => console.error('[pear-wallpaper] worker exited', code, status))
-
-  // main relays: it does NOT parse bridge frames, just forwards them.
-  let rbuf = ''
-  workerPipe.on('data', (chunk) => {
-    rbuf += chunk.toString('utf8')
-    let i
-    while ((i = rbuf.indexOf('\n')) !== -1) {
-      const line = rbuf.slice(0, i); rbuf = rbuf.slice(i + 1)
-      if (!line) continue
-      let msg; try { msg = JSON.parse(line) } catch { continue }
-      if (win) win.webContents.send('bridge:to-renderer', msg)
-    }
+  // main relays: it does NOT interpret bridge frames, just forwards them.
+  worker = createWorkerSupervisor({
+    spawn: () => PearRuntime.run(path.join(__dirname, 'worker/core-host.js'), [storageDir, exePath]),
+    onFrame: (msg) => { if (win) win.webContents.send('bridge:to-renderer', msg) },
+    onStatus: sendWorkerStatus
   })
+  worker.start()
 
   // OTA: construct the updater instance. Guarded — a network/updater
   // failure here (e.g. offline, sandboxed CI, no DHT reachable) must never
@@ -218,12 +217,18 @@ app.whenReady().then(() => {
   // frame id is fine for the same reason (nothing in main.js correlates
   // replies to requests).
   powerMonitor.on('resume', () => {
-    if (workerPipe) workerPipe.write(Buffer.from(JSON.stringify({ t: 'req', id: -2, cmd: 'syncNow', args: [] }) + '\n'))
+    if (worker) worker.write({ t: 'req', id: -2, cmd: 'syncNow', args: [] })
   })
 })
 ipcMain.on('bridge:to-main', (evt, msg) => {
   if (msg && msg.cmd === 'restartToUpdate') { restartToUpdate(evt, msg); return }
-  if (workerPipe) workerPipe.write(Buffer.from(JSON.stringify(msg) + '\n'))
+  if (msg && msg.cmd === 'restartWorker') {
+    if (worker) worker.start()
+    evt.sender.send('bridge:to-renderer', { t: 'res', id: msg.id, ok: true })
+    return
+  }
+  if (worker && worker.write(msg)) return
+  if (msg && msg.t === 'req') evt.sender.send('bridge:to-renderer', { t: 'res', id: msg.id, ok: false, error: 'Pear Wallpaper is restarting. Try again in a moment.' })
 })
 
 // No window-all-closed→quit: this is a menu-bar-resident app (close-to-tray,
@@ -237,12 +242,11 @@ ipcMain.on('bridge:to-main', (evt, msg) => {
 // worker, and `.end()` only half-closes and never reaches 'close', confirmed
 // via a throwaway harness; see task-3-report.md). `before-quit` can't await
 // async work, so hold the quit off with `event.preventDefault()` until
-// either the worker's own `exit` event fires (it called `Bare.exit()` after
-// tearing down) or a 2s grace period elapses, then force it with
-// `.destroy()` and finish quitting via `app.exit()`.
+// `worker.stop()` settles (worker exited, 2s grace elapsed, or it was
+// already dead), then finish quitting via `app.exit()`.
 let shuttingDown = false
 app.on('before-quit', (event) => {
-  if (shuttingDown || !workerPipe) return
+  if (shuttingDown || !worker) return
   shuttingDown = true
   event.preventDefault()
   // Per pear-runtime/README.md: "be sure to await pear.close() during
@@ -251,12 +255,5 @@ app.on('before-quit', (event) => {
   // it tears down the updater's swarm/store, but nothing downstream depends
   // on it finishing before the process exits.
   if (pear) pear.close().catch((err) => console.error('[pear-wallpaper] pear-runtime updater close failed', err))
-  const finish = () => { try { workerPipe.destroy() } catch { /* already closed */ } app.exit() }
-  const timer = setTimeout(finish, 2000)
-  workerPipe.once('exit', () => { clearTimeout(timer); app.exit() })
-  try {
-    workerPipe.write(Buffer.from(JSON.stringify({ t: 'shutdown' }) + '\n'))
-  } catch {
-    clearTimeout(timer); finish()
-  }
+  worker.stop().then(() => app.exit())
 })

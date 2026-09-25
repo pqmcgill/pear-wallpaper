@@ -37,3 +37,36 @@ test('non-creator sees roster read-only: no remove/approve/deny/create-invite co
   t.absent(/deny/i.test(html))
   t.absent(/create invite/i.test(html))
 })
+
+// A creator alone in a new group has nothing to do but invite someone, so
+// Devices mints the invite on arrival instead of waiting for a click.
+test('a creator alone in the group is shown an invite being made, without clicking', async (t) => {
+  const { render } = await import('preact-render-to-string')
+  const { h } = await import('preact')
+  const { DeviceList } = await import('../ui/components/DeviceList.js')
+  const snapshot = { roster: [{ key: 'aa', name: 'Mac', isSelf: true, isCreator: true, online: true }] }
+  const html = render(h(DeviceList, { bridge: { call: async () => 'INVITE' }, snapshot, candidates: [] }))
+  t.ok(/making an invite/i.test(html))
+})
+
+test('a creator with other devices is not shown an invite until asked', async (t) => {
+  const { render } = await import('preact-render-to-string')
+  const { h } = await import('preact')
+  const { DeviceList } = await import('../ui/components/DeviceList.js')
+  const snapshot = { roster: [{ key: 'aa', name: 'Mac', isSelf: true, isCreator: true, online: true }, { key: 'bb', name: 'Tablet', isSelf: false, isCreator: false, online: true }] }
+  const html = render(h(DeviceList, { bridge: { call: async () => 'INVITE' }, snapshot, candidates: [] }))
+  t.absent(/making an invite/i.test(html))
+})
+
+test('InviteCard wraps the full invite, says what to do with it, and keeps the QR small', async (t) => {
+  const { render } = await import('preact-render-to-string')
+  const { h } = await import('preact')
+  const { InviteCard } = await import('../ui/components/DeviceList.js')
+  const invite = 'y'.repeat(112)
+  const html = render(h(InviteCard, { invite }))
+  t.ok(html.includes(invite), 'the whole invite is in the page')
+  t.ok(/<code[^>]*word-break:\s*break-all/.test(html), 'the invite wraps instead of running off the window')
+  t.ok(/paste/i.test(html) && /scan/i.test(html), 'an instruction line says to paste it or scan the QR')
+  t.ok(/<svg/.test(html), 'renders the QR')
+  t.ok(/class="qr"[^>]*width:\s*\d+px/.test(html), 'the QR has a fixed small width')
+})

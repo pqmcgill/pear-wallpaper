@@ -1,7 +1,6 @@
 import { h } from 'preact'
 import { useState } from 'preact/hooks'
 import htm from 'htm'
-import { qrSvg } from '../qr.js'
 const html = htm.bind(h)
 
 // Maps a joinGroup() rejection's Error#message to user-facing copy. joinGroup
@@ -30,16 +29,17 @@ export function friendlyJoinError (message) {
 }
 
 export function Onboarding ({ bridge }) {
-  const [invite, setInvite] = useState(null)
   const [createError, setCreateError] = useState(null)
   const [joinValue, setJoinValue] = useState('')
   const [joining, setJoining] = useState(false)
   const [joinError, setJoinError] = useState(null)
 
+  // No invite here: createGroup's state push routes to MainView and unmounts
+  // this component, so Devices mints the creator's first invite instead.
   const create = async () => {
     setCreateError(null)
     try {
-      setInvite(await bridge.call('createGroup').then(() => bridge.call('createInvite')))
+      await bridge.call('createGroup')
     } catch (err) {
       setCreateError(err.message)
     }
@@ -60,18 +60,15 @@ export function Onboarding ({ bridge }) {
   return html`
     <section class="onboarding">
       <h1>Pear Wallpaper</h1>
+      <p>Send wallpapers between your family's computers and phones.</p>
       <div class="create">
         <button onClick=${create}>Create a group</button>
-        ${invite && html`
-          <div class="invite">
-            <code>${invite}</code>
-            <div class="qr" dangerouslySetInnerHTML=${{ __html: qrSvg(invite) }}></div>
-          </div>`}
         ${createError && html`<p class="create-error">${createError}</p>`}
       </div>
       <div class="join">
+        <p>Got an invite from another device? Paste it here.</p>
         <input placeholder="Paste invite" value=${joinValue} onInput=${(e) => setJoinValue(e.target.value)} disabled=${joining} />
-        <button onClick=${join} disabled=${joining}>${joining ? 'Joining…' : 'Join a group'}</button>
+        <button onClick=${join} disabled=${joining || !joinValue.trim()}>${joining ? 'Joining…' : 'Join a group'}</button>
         ${joinError && html`<p class="join-error">${joinError}</p>`}
       </div>
     </section>`

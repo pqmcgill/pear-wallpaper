@@ -81,3 +81,22 @@ test('Waiting falls back to generic copy for an unrecognized joinError', async (
   const html = render(h(Waiting, { snapshot: { joinError: 'some weird error' } }))
   t.ok(html.includes('Could not join. Ask for a fresh invite.'))
 })
+
+test('Onboarding says in one line what the app is for', async (t) => {
+  const { render } = await import('preact-render-to-string')
+  const { h } = await import('preact')
+  const { Onboarding } = await import('../ui/components/Onboarding.js')
+  const html = render(h(Onboarding, { bridge: { call: async () => {} } }))
+  t.ok(/wallpaper/i.test(html.replace(/<h1>Pear Wallpaper<\/h1>|<title>.*<\/title>/g, '')), 'an intro line beyond the heading')
+})
+
+// With nothing pasted there is nothing to join; the button waits for an
+// invite instead of failing with "Ask for a fresh invite".
+test('Join a group is disabled until an invite is pasted, and the join area says to paste one', async (t) => {
+  const { render } = await import('preact-render-to-string')
+  const { h } = await import('preact')
+  const { Onboarding } = await import('../ui/components/Onboarding.js')
+  const html = render(h(Onboarding, { bridge: { call: async () => {} } }))
+  t.ok(/<button[^>]*disabled[^>]*>Join a group<\/button>/.test(html), 'join disabled while empty')
+  t.ok(/paste it/i.test(html), 'a hint says to paste the invite')
+})

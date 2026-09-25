@@ -1,0 +1,14 @@
+Live keyboard walk on the Send tab (pw key, real CDP key events), fix/a4-keyboard-access:
+
+BEFORE (dev): Tab from the nav went Devices -> Send -> Received -> Settings -> target checkbox; the dropzone
+(a <label> around a display:none input) was never focusable, so a keyboard user could not pick a picture.
+
+AFTER:
+focus: button "Received"
+focus: button "Settings"
+focus: button "Drop a JPEG, PNG or WebP picture here, or click to browse"
+focus: input ""                      <- target checkbox (Send button is disabled until a file is picked)
+Space on the dropzone -> file chooser opened: true
+Enter on the dropzone -> file chooser opened: true
+Tab, Space -> target checkbox checked: true
+Nav: "Devices Send[current] Received Settings"  (aria-current="page" on the open tab, bold + underline)

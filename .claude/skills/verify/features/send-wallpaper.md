@@ -9,7 +9,7 @@ In the Send tab a member picks an image, ticks one or more target devices, and c
 - `send-pick-drop`: dragging an image onto the dropzone (not drivable, see Gotchas).
 - `send-targets`: the checkbox for each non-self roster device, with `online` or `offline` after its name and no send status. `Send` stays disabled until there is a file and at least one target.
 - `send-status`: `Recently sent` (`.send .sent`, hidden until the first send) lists this device's sends, newest first: picture file name, time, then each target with `Not delivered yet`, `Waiting for <name> to come online` (pending and offline), `Delivered`, or `Replaced by a newer picture` (the target applied a newer send first). Same words as Android's Sent tab.
-- `send-formats`: only JPEG, PNG and WebP up to 20 MB are accepted. The picker offers any image, and other formats (for example HEIC) are rejected only after `Send` with `unsupported image format (JPEG, PNG, WebP only)` (issue #18).
+- `send-formats`: only JPEG, PNG and WebP up to 20 MB are accepted. The picker offers only those, and every pick (browse or drop) is checked by core's real format sniff, so a HEIC (even renamed `.jpg`) is refused at pick time with `Only JPEG, PNG and WebP pictures can be sent. If this is an iPhone photo (HEIC), export it as a JPEG first.`
 - `send-apply`: the receiving device's worker sets the macOS desktop picture to `received/<id>.<ext>`.
 
 ## How to get to it (user POV)
@@ -30,6 +30,8 @@ Preconditions:
 - **Send.** Run `pw click a "Send" 1` (the submit button). Right after, `pw read a ".send .sent .status"` prints `Not delivered yet`. Then run `pw wait a "Delivered" 120`. The dropzone resets, and the newest `Recently sent` entry reads `verify-b Delivered`. Run `pw shot a delivered`.
 - **Receiver state.** Run `pw state b`. `received[0]` has `appliedAt` and `filePath` under `.verify-runs/<run>/userdata/b/received/`.
 - **Real side effect.** Run `pw wallpaper --save after-send`. It prints b's `received/<id>.png`. Then run `pw hash "$F" .verify-runs/$(cat .verify-runs/current)/artifacts/wallpaper-after-send.png`. The two sha256 values match.
+
+- **Keyboard path.** On the Send tab, blur focus with `pw eval a "document.activeElement.blur()"`, then repeat `pw key a Tab` until it prints the dropzone button. Run `pw key a Space --expect-chooser`: it prints `file chooser opened: true`. One more `pw key a Tab` focuses the first target checkbox, and `pw key a Space` ticks it.
 
 ## Gotchas
 

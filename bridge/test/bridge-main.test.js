@@ -19,7 +19,8 @@ function fakeCore () {
     async createGroup () { this.calls.push(['createGroup']) },
     async createInvite () { this.calls.push(['createInvite']); return 'INVITE123' },
     async approve (k) { this.calls.push(['approve', k]) },
-    async sendWallpaper (img, targets, opts) { this.calls.push(['sendWallpaper', img, targets, opts]); return { id: 'x' } }
+    async sendWallpaper (img, targets, opts) { this.calls.push(['sendWallpaper', img, targets, opts]); return { id: 'x' } },
+    async checkImage (img) { this.calls.push(['checkImage', img]); return '.png' }
   })
 }
 
@@ -55,6 +56,16 @@ test('sendWallpaper command passes a display filename through to core', async (t
   uiT.send({ t: 'req', id: 9, cmd: 'sendWallpaper', args: [{ filePath: '/staged/1-abc.png', targets: ['bb'], filename: 'beach.png' }] })
   await reply
   t.alike(core.calls.find((c) => c[0] === 'sendWallpaper'), ['sendWallpaper', '/staged/1-abc.png', ['bb'], { filename: 'beach.png' }])
+})
+
+test('checkImage command runs core.checkImage on the picked path', async (t) => {
+  const [mainT, uiT] = pairTransport(); const core = fakeCore()
+  createBridgeMain({ core, transport: mainT }).start()
+  const reply = new Promise((res) => uiT.onMessage((m) => { if (m.t === 'res' && m.id === 10) res(m) }))
+  uiT.send({ t: 'req', id: 10, cmd: 'checkImage', args: [{ filePath: '/a.png' }] })
+  const r = await reply
+  t.ok(r.ok, r.error)
+  t.alike(core.calls, [['checkImage', '/a.png']])
 })
 
 test('reapply looks up filePath in listReceived and calls platform.setWallpaper', async (t) => {

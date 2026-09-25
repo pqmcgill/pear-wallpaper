@@ -139,8 +139,9 @@ await core.ready()
 
 - **`await core.sendWallpaper(image: string | Buffer, targets: string[], { filename?: string | null } = {}): Promise<{ id: string }>`**
   Validates the image (JPEG/PNG/WebP by magic bytes, 20 MB cap — throws
-  `'unsupported image format (JPEG, PNG, WebP only)'` or `'image
-  exceeds 20 MB cap'`), stores it in this device's blob store, appends
+  `'Only JPEG, PNG and WebP pictures can be sent. If this is an iPhone
+  photo (HEIC), export it as a JPEG first.'` or `'This picture is too
+  big to send. Pick one under 20 MB.'`, worded for the user), stores it in this device's blob store, appends
   `set-wallpaper`, and resolves immediately — queued-delivery
   semantics, it never waits on any target. `image` as a string is read
   from disk via `fs.promises.readFile`. Every entry in `targets` must
@@ -152,6 +153,11 @@ await core.ready()
   string `image` supply its own name. Only the last path segment is
   kept, because `meta` replicates to every member and a local path
   would leak folder and user names.
+
+- **`await core.checkImage(image: string | Buffer): Promise<'.jpg' | '.png' | '.webp'>`**
+  Runs `sendWallpaper`'s read and validation without sending, and
+  throws the same errors. Needs no group. Shells call it when the user
+  picks a file, so a file that can't be sent is refused then.
 
 - **`await core.listSends({ limit = 20 } = {}): Promise<Array<{ id, meta, sentAt, targets: [{ key, status: 'pending' | 'delivered' | 'superseded' }] }>>`**
   This device's sent history, newest first (by log order, not

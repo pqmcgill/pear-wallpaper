@@ -9,10 +9,14 @@ const STATUS = {
   superseded: 'Replaced by a newer picture'
 }
 
+export function fileName (filePath) {
+  return filePath.split(/[\\/]/).pop()
+}
+
 // meta.filename has held a full path; keep only the last segment either way.
 function pictureName (meta) {
   const filename = meta && meta.filename
-  return filename ? filename.split(/[\\/]/).pop() : 'A picture'
+  return filename ? fileName(filename) : 'A picture'
 }
 
 // snapshot.sends is core's listSends: this device's sends, newest first.

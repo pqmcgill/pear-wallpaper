@@ -2,6 +2,8 @@ const test = require('brittle')
 const fs = require('fs')
 const path = require('path')
 const b4a = require('b4a')
+const fs = require('fs')
+const path = require('path')
 const { validateImage } = require('../lib/image.js')
 const WallpaperCore = require('../index.js')
 const { pairedDuo, until, tmpDir } = require('./helpers')
@@ -19,8 +21,29 @@ test('validateImage: sniffs formats, rejects junk and oversize', function (t) {
   const webp = b4a.alloc(64)
   webp.set(b4a.from('RIFF'), 0); webp.set(b4a.from('WEBP'), 8)
   t.is(validateImage(webp), '.webp')
-  t.exception(() => validateImage(b4a.from('not an image')), /unsupported/)
-  t.exception(() => validateImage(fakePng(21 * 1024 * 1024)), /20 MB/)
+  t.exception(() => validateImage(b4a.from('not an image')), /Only JPEG, PNG and WebP/)
+  t.exception(() => validateImage(fakePng(21 * 1024 * 1024)), /too big to send.*20 MB/)
+})
+
+test('checkImage: reads a picked file and gives the reason it cannot be sent, with no group needed', async function (t) {
+  const dir = await tmpDir(t)
+  const core = new WallpaperCore({ storageDir: path.join(dir, 'store'), deviceName: 'mac' })
+  await core.ready()
+  t.teardown(() => core.close())
+  const png = path.join(dir, 'beach.png')
+  fs.writeFileSync(png, fakePng())
+  t.is(await core.checkImage(png), '.png')
+
+  // An iPhone photo: an ISO-BMFF 'ftyp' box with the 'heic' brand.
+  const heic = b4a.alloc(64)
+  heic.set([0, 0, 0, 0x18], 0); heic.set(b4a.from('ftypheic'), 4)
+  const renamed = path.join(dir, 'photo.jpg')
+  fs.writeFileSync(renamed, heic)
+  await t.exception(core.checkImage(renamed), /If this is an iPhone photo \(HEIC\), export it as a JPEG first/)
+
+  const huge = path.join(dir, 'huge.png')
+  fs.writeFileSync(huge, fakePng(21 * 1024 * 1024))
+  await t.exception(core.checkImage(huge), /too big to send/)
 })
 
 test('sendWallpaper: op lands in both views, status pending', async function (t) {

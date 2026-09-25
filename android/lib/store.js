@@ -28,6 +28,9 @@ export function reduce (snap, action) {
     // friendly copy in the garbage-invite case — a real regression,
     // caught in review.
     case 'join-error': return { ...snap, joinError: action.payload.message }
+    // Scopes joinError to one attempt: a rejected earlier attempt (e.g. a
+    // mistyped invite) must not show as a failure on the next one's Waiting.
+    case 'join-start': return { ...snap, joinError: null }
     case 'dismiss-error': return { ...snap, lastError: null }
     default: return snap
   }

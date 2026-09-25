@@ -41,7 +41,8 @@ a `pendingWallpaper` command instead of applying anything itself;
 `setWallpaper` (via the local `modules/wallpaper-setter/` Expo Module),
 and acks with `markApplied` on success. A failed apply is simply left
 unacked — core's existing retry-next-sync contract, same as desktop,
-just enforced one layer further out.
+just enforced one layer further out. The failure also goes to the error
+banner, as desktop's does.
 
 ## Dev loop
 

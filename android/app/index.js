@@ -1,5 +1,6 @@
 import { useContext } from 'react'
 import { View, StyleSheet } from 'react-native'
+import { useLocalSearchParams } from 'expo-router'
 import { SnapshotContext } from './_layout'
 import { Onboarding } from '../components/Onboarding'
 import { Waiting } from '../components/Waiting'
@@ -22,14 +23,17 @@ import { ErrorBanner } from '../components/ErrorBanner'
 // attemptJoin() catch also routes the raw rejection into shared
 // snapshot.joinError, the only state Waiting can see once it has replaced
 // Onboarding. See docs/notes/qa-android.md Act 2 for the reproduction.
-function routedView (snapshot, bridge, dispatch) {
+function routedView (snapshot, bridge, dispatch, tab) {
   if (snapshot.groupStatus === 'joining') return <Waiting snapshot={snapshot} />
-  if (snapshot.groupStatus === 'member') return <MainView bridge={bridge} snapshot={snapshot} />
+  if (snapshot.groupStatus === 'member') return <MainView bridge={bridge} snapshot={snapshot} initialTab={tab} />
   return <Onboarding bridge={bridge} dispatch={dispatch} />
 }
 
 export default function Index () {
   const { snapshot, dispatch, bridge } = useContext(SnapshotContext)
+  // app/send.js returns here with tab=sent so the sender lands on the
+  // delivery status of what they just sent.
+  const { tab } = useLocalSearchParams()
 
   return (
     <View style={styles.root}>
@@ -39,7 +43,7 @@ export default function Index () {
           onDismiss={() => dispatch({ type: 'dismiss-error' })}
         />
       )}
-      {routedView(snapshot, bridge, dispatch)}
+      {routedView(snapshot, bridge, dispatch, tab)}
     </View>
   )
 }

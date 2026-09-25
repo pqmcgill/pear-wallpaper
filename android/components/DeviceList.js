@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { View, Text, Pressable, StyleSheet } from 'react-native'
 import { SvgXml } from 'react-native-svg'
 import { qrSvg } from '../lib/qr'
@@ -14,6 +14,7 @@ export function DeviceList ({ bridge, snapshot, candidates }) {
   const [actionError, setActionError] = useState(null)
   const self = snapshot.roster.find((d) => d.isSelf)
   const amCreator = !!(self && self.isCreator)
+  const alone = snapshot.roster.every((d) => d.isSelf)
 
   const onCreateInvite = async () => {
     try {
@@ -23,6 +24,13 @@ export function DeviceList ({ bridge, snapshot, candidates }) {
       setActionError(err.message)
     }
   }
+  // A creator with no one else in the group has one thing to do next, so
+  // show the invite without making them find the button. createInvite hands
+  // back the current unexpired invite, so remounting does not mint another.
+  useEffect(() => {
+    if (amCreator && alone) onCreateInvite()
+  }, [amCreator, alone])
+
   const onRemove = async (key) => {
     try {
       setActionError(null)
@@ -78,6 +86,7 @@ export function DeviceList ({ bridge, snapshot, candidates }) {
 
       {amCreator && (
         <View style={styles.inviteBlock}>
+          {alone && <Text style={styles.hint}>Invite another device: scan this code with it, or paste the text into it.</Text>}
           <Pressable onPress={onCreateInvite}>
             <Text>New invite</Text>
           </Pressable>
@@ -104,6 +113,7 @@ const styles = StyleSheet.create({
   dotOff: { backgroundColor: 'gray' },
   action: { marginLeft: 12, color: 'blue' },
   inviteBlock: { marginTop: 24 },
+  hint: { marginBottom: 8 },
   inviteText: { marginTop: 8 },
   error: { marginTop: 12, color: 'crimson' }
 })

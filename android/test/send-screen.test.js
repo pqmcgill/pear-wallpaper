@@ -180,6 +180,37 @@ test('a sendWallpaper rejection surfaces inline without calling onSent', async (
   expect(onSent).not.toHaveBeenCalled()
 })
 
+test('a device not in a group sees why it cannot send, and can cancel back out', async () => {
+  const onCancel = jest.fn()
+  const { getByText } = await render(
+    <SendScreen bridge={fakeBridge()} snapshot={{ groupStatus: 'none', roster: [] }} filePath="/staged/photo.png" onCancel={onCancel} />
+  )
+
+  getByText('Join a group first, then share the picture again.')
+  await fireEvent.press(getByText('Cancel'))
+  expect(onCancel).toHaveBeenCalled()
+})
+
+test('the only device in a group is told to add another one', async () => {
+  const { getByText } = await render(
+    <SendScreen
+      bridge={fakeBridge()}
+      snapshot={{ groupStatus: 'member', roster: [{ key: 'self-key', name: 'this-phone', isSelf: true }] }}
+      filePath="/staged/photo.png"
+    />
+  )
+
+  getByText('No other devices in your group yet. Invite one from Devices, then share the picture again.')
+})
+
+test('a device with targets sees no empty-state copy', async () => {
+  const { queryByText } = await render(
+    <SendScreen bridge={fakeBridge()} snapshot={{ groupStatus: 'member', ...snapshot }} filePath="/staged/photo.png" />
+  )
+
+  expect(queryByText(/share the picture again/)).toBeNull()
+})
+
 describe('stageSharedImage', () => {
   test('copies the shared uri into a timestamped file under the staging dir, preserving its extension', () => {
     const staged = stageSharedImage('content://com.android.providers.media/document/photo.png')
@@ -211,6 +242,19 @@ describe('stageSharedImage', () => {
 })
 
 describe('post-send staging cleanup', () => {
+  test('cancelling deletes the staged file without sending', async () => {
+    const staged = stageSharedImage('content://.../photo.png')
+    const bridge = fakeBridge()
+    const { getByText } = await render(
+      <SendScreen bridge={bridge} snapshot={snapshot} filePath={staged} onCancel={jest.fn()} />
+    )
+
+    await fireEvent.press(getByText('Cancel'))
+
+    expect(__listStaged()).toEqual([])
+    expect(bridge.call).not.toHaveBeenCalled()
+  })
+
   test('a successful send deletes the staged file it just sent', async () => {
     const staged = stageSharedImage('content://.../photo.png')
     expect(__listStaged()).toHaveLength(1)

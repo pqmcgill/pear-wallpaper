@@ -31,7 +31,6 @@ function friendlyJoinError (message) {
 }
 
 export function Onboarding ({ bridge, dispatch }) {
-  const [invite, setInvite] = useState(null)
   const [createError, setCreateError] = useState(null)
   const [joinValue, setJoinValue] = useState('')
   const [joining, setJoining] = useState(false)
@@ -42,7 +41,6 @@ export function Onboarding ({ bridge, dispatch }) {
     setCreateError(null)
     try {
       await bridge.call('createGroup')
-      setInvite(await bridge.call('createInvite'))
     } catch (err) {
       setCreateError(err.message)
     }
@@ -67,6 +65,7 @@ export function Onboarding ({ bridge, dispatch }) {
   const attemptJoin = async (value) => {
     setJoinError(null)
     setJoining(true)
+    dispatch?.({ type: 'join-start' })
     try {
       await bridge.call('joinGroup', value)
     } catch (err) {
@@ -95,7 +94,6 @@ export function Onboarding ({ bridge, dispatch }) {
         <Pressable onPress={create}>
           <Text>Create a group</Text>
         </Pressable>
-        {invite && <Text selectable style={styles.invite}>{invite}</Text>}
         {createError && <Text style={styles.error}>{createError}</Text>}
       </View>
       <View style={styles.block}>
@@ -121,6 +119,5 @@ const styles = StyleSheet.create({
   section: { flex: 1, padding: 24, justifyContent: 'center' },
   title: { fontSize: 24, fontWeight: 'bold', marginBottom: 24 },
   block: { marginBottom: 24 },
-  invite: { marginTop: 8 },
   error: { marginTop: 8, color: 'crimson' }
 })

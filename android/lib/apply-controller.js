@@ -2,8 +2,8 @@
 // pending wallpapers over the bridge; this controller runs the native setter
 // and acks. Mirrors sync-engine's applyPending semantics exactly — coalesced
 // passes, and a setter/ack failure leaves the item unacked so the next
-// trigger retries it.
-export function createApplyController ({ bridge, setter, getTarget = () => 'home' }) {
+// trigger retries it. onError plays the part of sync-engine's 'error' event.
+export function createApplyController ({ bridge, setter, getTarget = () => 'home', onError }) {
   let applying = false
   let queued = false
   async function applyPending () {
@@ -16,8 +16,8 @@ export function createApplyController ({ bridge, setter, getTarget = () => 'home
         await setter(item.filePath, getTarget())   // throws -> stays unacked
         await bridge.call('markApplied', item.id)
       }
-    } catch {
-      // swallowed by design: unacked item retries on the next trigger
+    } catch (err) {
+      onError(err)
     } finally {
       applying = false
       if (queued) { queued = false; applyPending() }

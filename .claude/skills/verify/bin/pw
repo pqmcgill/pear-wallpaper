@@ -1,0 +1,397 @@
+#!/usr/bin/env node
+'use strict'
+// Verification driver for the pear-wallpaper desktop shell.
+// Launches isolated Electron instances with a CDP port and drives the
+// renderer the way a user would (real mouse events, typed text, the real
+// <input type=file> path). Zero dependencies: Node 22's global WebSocket.
+// See ../SKILL.md for usage.
+
+const { spawn, execFileSync } = require('child_process')
+const fs = require('fs')
+const net = require('net')
+const path = require('path')
+
+const REPO = path.resolve(__dirname, '../../../..')
+const DESKTOP = path.join(REPO, 'desktop')
+const RUNS = path.join(REPO, '.verify-runs')
+const CURRENT = path.join(RUNS, 'current')
+const ORIGINAL = path.join(RUNS, 'original-wallpaper.json')
+// The real Electron binary, not the node_modules/.bin wrapper script, so the
+// recorded pid is the app itself.
+const ELECTRON = require(path.join(DESKTOP, 'node_modules', 'electron'))
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+const die = (msg) => { console.error('pw: ' + msg); process.exit(1) }
+
+// ---------- run + instance state ----------
+
+function runDir () {
+  if (process.env.PW_RUN) return path.resolve(process.env.PW_RUN)
+  if (!fs.existsSync(CURRENT)) die('no active run — run `pw start-run` first')
+  return path.join(RUNS, fs.readFileSync(CURRENT, 'utf8').trim())
+}
+const instFile = (name) => path.join(runDir(), 'instances', name + '.json')
+function readInst (name) {
+  const f = instFile(name)
+  if (!fs.existsSync(f)) die(`no instance "${name}" in this run — \`pw launch ${name}\` first`)
+  return JSON.parse(fs.readFileSync(f, 'utf8'))
+}
+function listInsts () {
+  const dir = path.join(runDir(), 'instances')
+  if (!fs.existsSync(dir)) return []
+  return fs.readdirSync(dir).filter((f) => f.endsWith('.json')).map((f) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')))
+}
+const alive = (pid) => { try { process.kill(pid, 0); return true } catch { return false } }
+const artifacts = () => path.join(runDir(), 'artifacts')
+
+function freePort () {
+  return new Promise((resolve, reject) => {
+    const s = net.createServer()
+    s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)) })
+    s.on('error', reject)
+  })
+}
+
+// ---------- wallpaper (the real OS side effect) ----------
+
+function currentWallpaper () {
+  return execFileSync('osascript', ['-e', 'tell application "System Events" to get picture of desktop 1']).toString().trim()
+}
+function setWallpaper (p) {
+  execFileSync('osascript', ['-e', 'on run argv', '-e', 'set p to POSIX file (item 1 of argv)',
+    '-e', 'tell application "System Events" to set picture of every desktop to p', '-e', 'end run', '--', p])
+}
+
+// ---------- minimal CDP client ----------
+
+async function pageTarget (port) {
+  const res = await fetch(`http://127.0.0.1:${port}/json/list`)
+  const list = await res.json()
+  return list.find((t) => t.type === 'page' && t.url.endsWith('/ui/index.html'))
+}
+
+async function connect (name) {
+  const inst = readInst(name)
+  if (!alive(inst.pid)) die(`instance "${name}" (pid ${inst.pid}) is not running`)
+  const target = await pageTarget(inst.port).catch(() => null)
+  if (!target) die(`instance "${name}" has no renderer page on CDP port ${inst.port}`)
+  const ws = new WebSocket(target.webSocketDebuggerUrl)
+  await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = () => reject(new Error('CDP connect failed')) })
+  let id = 0
+  const pending = new Map()
+  ws.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data)
+    if (msg.id && pending.has(msg.id)) {
+      const { resolve, reject } = pending.get(msg.id); pending.delete(msg.id)
+      msg.error ? reject(new Error(msg.error.message)) : resolve(msg.result)
+    }
+  }
+  const send = (method, params = {}) => new Promise((resolve, reject) => {
+    const i = ++id; pending.set(i, { resolve, reject }); ws.send(JSON.stringify({ id: i, method, params }))
+  })
+  const evaluate = async (expression) => {
+    const r = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true })
+    if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text)
+    return r.result.value
+  }
+  return { inst, send, evaluate, close: () => ws.close() }
+}
+
+// Finds a visible, enabled clickable element whose trimmed text equals `text`
+// (buttons first, then labels, then any element with that exact own text).
+const FIND = (text, nth) => `(() => {
+  const want = ${JSON.stringify(text)}
+  const norm = (s) => (s || '').replace(/\\s+/g, ' ').trim()
+  const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+  let els = [...document.querySelectorAll('button')].filter((e) => norm(e.innerText) === want || e.getAttribute('aria-label') === want)
+  if (!els.length) els = [...document.querySelectorAll('label')].filter((e) => norm(e.innerText) === want)
+  if (!els.length) els = [...document.querySelectorAll('li')].filter((e) => norm(e.innerText).includes(want)).map((li) => li.querySelector('button, label')).filter(Boolean)
+  els = els.filter(vis)
+  const el = els[${nth}]
+  if (!el) return { error: 'no visible element with text ' + JSON.stringify(want) + ' (found ' + els.length + ')' }
+  if (el.disabled) return { error: 'element ' + JSON.stringify(want) + ' is disabled' }
+  el.scrollIntoView({ block: 'center' })
+  const r = el.getBoundingClientRect()
+  return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+})()`
+
+async function mouseClick (c, x, y) {
+  await c.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
+  await c.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 })
+  await c.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 })
+}
+
+const bodyText = (c) => c.evaluate('document.body.innerText')
+
+// ---------- commands ----------
+
+const commands = {
+  async 'start-run' () {
+    fs.mkdirSync(RUNS, { recursive: true })
+    if (fs.existsSync(CURRENT)) {
+      const prev = path.join(RUNS, fs.readFileSync(CURRENT, 'utf8').trim())
+      const live = fs.existsSync(path.join(prev, 'instances')) &&
+        fs.readdirSync(path.join(prev, 'instances')).some((f) => alive(JSON.parse(fs.readFileSync(path.join(prev, 'instances', f), 'utf8')).pid))
+      if (live) die(`previous run ${prev} still has live instances — \`pw cleanup\` it first`)
+    }
+    const id = new Date().toISOString().replace(/[:.]/g, '-')
+    const dir = path.join(RUNS, id)
+    fs.mkdirSync(path.join(dir, 'artifacts'), { recursive: true })
+    fs.mkdirSync(path.join(dir, 'instances'), { recursive: true })
+    // The user's real wallpaper is kept once in RUNS/original-wallpaper.json,
+    // and only refreshed when the current picture is not one a verify run set;
+    // otherwise a crashed or chained run would "restore" a test image.
+    let current = null
+    try { current = currentWallpaper() } catch (err) { console.error('warn: could not read wallpaper:', err.message) }
+    if (current && !current.startsWith(RUNS + path.sep) && fs.existsSync(current)) {
+      const copy = path.join(RUNS, 'original-wallpaper' + path.extname(current))
+      fs.copyFileSync(current, copy)
+      fs.writeFileSync(ORIGINAL, JSON.stringify({ path: current, copy }, null, 2))
+    } else if (!fs.existsSync(ORIGINAL)) {
+      console.error(`warn: current wallpaper (${current}) is missing or was set by a verify run, and no saved original exists; cleanup will not be able to restore it`)
+    }
+    fs.writeFileSync(CURRENT, id)
+    console.log(dir)
+  },
+
+  async launch (name) {
+    if (!name) die('usage: pw launch <name>')
+    if (fs.existsSync(instFile(name)) && alive(readInst(name).pid)) die(`instance "${name}" already running`)
+    const dir = runDir()
+    const userData = path.join(dir, 'userdata', name)
+    fs.mkdirSync(userData, { recursive: true })
+    // Documented user path for naming a device: device-name.txt before joining.
+    const nameFile = path.join(userData, 'device-name.txt')
+    if (!fs.existsSync(nameFile)) fs.writeFileSync(nameFile, 'verify-' + name)
+    const port = await freePort()
+    const logPath = path.join(dir, 'logs', name + '.log')
+    fs.mkdirSync(path.dirname(logPath), { recursive: true })
+    const log = fs.openSync(logPath, 'a')
+    // Same as `npm run dev -- -- --user-data-dir=...` (electron-forge start
+    // just runs electron on this dir), minus forge's wrapper process, so the
+    // pid/process group we record is the app itself.
+    const child = spawn(ELECTRON, ['.', `--user-data-dir=${userData}`, `--remote-debugging-port=${port}`], {
+      cwd: DESKTOP, detached: true, stdio: ['ignore', log, log]
+    })
+    child.unref()
+    const inst = { name, pid: child.pid, pgid: child.pid, port, userData, log: logPath, startedAt: new Date().toISOString() }
+    fs.writeFileSync(instFile(name), JSON.stringify(inst, null, 2))
+    const deadline = Date.now() + 60000
+    while (Date.now() < deadline) {
+      if (!alive(child.pid)) die(`electron exited during launch — see ${logPath}`)
+      const t = await pageTarget(port).catch(() => null)
+      if (t) {
+        const c = await connect(name)
+        const ready = await c.evaluate("!!document.querySelector('#app > .app-root > section, #app > .app-root > .main')").catch(() => false)
+        c.close()
+        if (ready) { console.log(JSON.stringify(inst)); return }
+      }
+      await sleep(500)
+    }
+    die(`instance "${name}" not ready after 60s — see ${logPath}`)
+  },
+
+  async doctor (name) {
+    const insts = name ? [readInst(name)] : listInsts()
+    if (!insts.length) die('no instances in this run')
+    let ok = true
+    for (const inst of insts) {
+      const lines = [`[${inst.name}] pid ${inst.pid} port ${inst.port}`]
+      if (!alive(inst.pid)) { lines.push('  FAIL process not running'); ok = false; console.log(lines.join('\n')); continue }
+      const cmdline = execFileSync('ps', ['-o', 'command=', '-p', String(inst.pid)]).toString()
+      if (!cmdline.includes(`--user-data-dir=${inst.userData}`)) { lines.push('  FAIL pid is not our electron (pid reused?)'); ok = false }
+      const kids = execFileSync('pgrep', ['-g', String(inst.pgid)]).toString().trim().split('\n')
+      const bare = kids.some((k) => { try { return /bare/.test(execFileSync('ps', ['-o', 'command=', '-p', k]).toString()) } catch { return false } })
+      lines.push(bare ? '  ok   bare worker process present' : '  FAIL no bare worker in process group')
+      if (!bare) ok = false
+      const c = await connect(inst.name)
+      const view = await c.evaluate(`(() => { const r = document.querySelector('#app .app-root'); if (!r) return 'blank'; if (r.querySelector('.onboarding')) return 'onboarding'; if (r.querySelector('.waiting')) return 'waiting'; if (r.querySelector('.main')) return 'main'; return 'unknown' })()`)
+      const state = await c.evaluate(bridgeCall('getState', []))
+      c.close()
+      lines.push(`  ok   renderer view: ${view}`)
+      if (state && /^[0-9a-f]{64}$/.test(state.deviceKey)) lines.push(`  ok   worker answers getState: ${state.deviceName} ${state.deviceKey.slice(0, 8)}… groupStatus=${state.groupStatus} roster=${state.roster.length}`)
+      else { lines.push('  FAIL getState did not return a device key'); ok = false }
+      console.log(lines.join('\n'))
+    }
+    process.exit(ok ? 0 : 1)
+  },
+
+  async text (name) { const c = await connect(name); console.log(await bodyText(c)); c.close() },
+
+  async click (name, text, nth = '0') {
+    if (!text) die('usage: pw click <name> "<exact text>" [nth]')
+    const c = await connect(name)
+    const r = await c.evaluate(FIND(text, Number(nth)))
+    if (r.error) { c.close(); die(r.error) }
+    await mouseClick(c, r.x, r.y)
+    c.close()
+  },
+
+  async fill (name, placeholder, value) {
+    if (value === undefined) die('usage: pw fill <name> "<placeholder>" "<value>"')
+    const c = await connect(name)
+    const r = await c.evaluate(`(() => { const el = document.querySelector('input[placeholder=' + JSON.stringify(${JSON.stringify(placeholder)}) + ']'); if (!el) return { error: 'no input with that placeholder' }; if (el.disabled) return { error: 'input disabled' }; el.scrollIntoView({ block: 'center' }); const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })()`)
+    if (r.error) { c.close(); die(r.error) }
+    await mouseClick(c, r.x, r.y)
+    await c.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: 4, commands: ['selectAll'] })
+    await c.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', modifiers: 4 })
+    await c.send('Input.insertText', { text: value })
+    c.close()
+  },
+
+  // Sets the Send tab's real <input type=file> (what the native picker would
+  // do), which fires its change event -> webUtils.getPathForFile via preload.
+  async file (name, filePath) {
+    if (!filePath) die('usage: pw file <name> <image path>')
+    const abs = path.resolve(filePath)
+    if (!fs.existsSync(abs)) die('no such file: ' + abs)
+    const c = await connect(name)
+    const { root } = await c.send('DOM.getDocument', { depth: -1 })
+    const { nodeId } = await c.send('DOM.querySelector', { nodeId: root.nodeId, selector: 'input[type=file]' })
+    if (!nodeId) { c.close(); die('no file input on screen — open the Send tab first') }
+    await c.send('DOM.setFileInputFiles', { nodeId, files: [abs] })
+    c.close()
+  },
+
+  async wait (name, text, timeoutSec = '90') {
+    if (!text) die('usage: pw wait <name> "<text>" [timeoutSec]')
+    const c = await connect(name)
+    const deadline = Date.now() + Number(timeoutSec) * 1000
+    while (Date.now() < deadline) {
+      if ((await bodyText(c)).includes(text)) { c.close(); console.log(`ok: "${text}" visible on ${name}`); return }
+      await sleep(500)
+    }
+    const final = await bodyText(c); c.close()
+    die(`timed out after ${timeoutSec}s waiting for "${text}" on ${name}. Screen:\n${final}`)
+  },
+
+  // Waits for a CSS selector to render and prints its text (e.g. the invite,
+  // which appears only after createInvite round-trips the worker).
+  async read (name, selector, timeoutSec = '30') {
+    if (!selector) die('usage: pw read <name> "<css selector>" [timeoutSec]')
+    const c = await connect(name)
+    const deadline = Date.now() + Number(timeoutSec) * 1000
+    while (Date.now() < deadline) {
+      const text = await c.evaluate(`document.querySelector(${JSON.stringify(selector)})?.innerText ?? null`)
+      if (text) { c.close(); console.log(text); return }
+      await sleep(300)
+    }
+    c.close()
+    die(`timed out after ${timeoutSec}s waiting for ${selector} on ${name}`)
+  },
+
+  // Observation only: reads the worker's snapshot. Never use bridge calls to
+  // perform the action under test.
+  async state (name) {
+    const c = await connect(name)
+    console.log(JSON.stringify(await c.evaluate(bridgeCall('getState', [])), null, 2))
+    c.close()
+  },
+
+  async shot (name, label) {
+    if (!label) die('usage: pw shot <name> <label>')
+    const c = await connect(name)
+    // Without focus emulation, captureScreenshot never returns for an occluded window.
+    await c.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+    await c.send('Page.bringToFront')
+    const { data } = await c.send('Page.captureScreenshot', { format: 'png' })
+    const text = await bodyText(c)
+    c.close()
+    const base = path.join(artifacts(), `${name}-${label}`)
+    fs.writeFileSync(base + '.png', Buffer.from(data, 'base64'))
+    fs.writeFileSync(base + '.txt', text + '\n')
+    console.log(base + '.png')
+  },
+
+  async eval (name, expr) { const c = await connect(name); console.log(JSON.stringify(await c.evaluate(expr), null, 2)); c.close() },
+
+  // Records the Mac's current desktop picture; `--save <label>` also copies
+  // the image into artifacts so the proof survives cleanup.
+  async wallpaper (flag, label) {
+    const p = currentWallpaper()
+    console.log(p)
+    if (flag === '--save') {
+      if (!label) die('usage: pw wallpaper --save <label>')
+      const dest = path.join(artifacts(), `wallpaper-${label}`)
+      fs.writeFileSync(dest + '.txt', p + '\n')
+      if (fs.existsSync(p)) fs.copyFileSync(p, dest + path.extname(p))
+    }
+  },
+
+  // Writes a uniquely-colored PNG into artifacts to send; its hash is the
+  // identity to match on the receiving side.
+  async fixture (label = 'fixture') {
+    const zlib = require('zlib')
+    const crypto = require('crypto')
+    const [w, h] = [640, 400]
+    const [r, g, b] = crypto.randomBytes(3)
+    const row = Buffer.alloc(1 + w * 3)
+    for (let x = 0; x < w; x++) row.set([r, g, b], 1 + x * 3)
+    const raw = Buffer.concat(Array.from({ length: h }, () => row))
+    const crcTable = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0 })
+    const crc = (buf) => { let c = 0xffffffff; for (const byte of buf) c = crcTable[(c ^ byte) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0 }
+    const chunk = (type, data) => {
+      const len = Buffer.alloc(4); len.writeUInt32BE(data.length)
+      const td = Buffer.concat([Buffer.from(type), data]); const c = Buffer.alloc(4); c.writeUInt32BE(crc(td))
+      return Buffer.concat([len, td, c])
+    }
+    const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr.set([8, 2, 0, 0, 0], 8)
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))])
+    const out = path.join(artifacts(), label + '.png')
+    fs.writeFileSync(out, png)
+    console.log(out)
+  },
+
+  // sha256 of files, for matching a sent fixture against what landed.
+  async hash (...files) {
+    const crypto = require('crypto')
+    for (const f of files) console.log(crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex') + '  ' + f)
+  },
+
+  async stop (name) {
+    const inst = readInst(name)
+    await stopInst(inst)
+    console.log(`stopped ${name}`)
+  },
+
+  async cleanup () {
+    const dir = runDir()
+    for (const inst of listInsts()) await stopInst(inst)
+    fs.rmSync(path.join(dir, 'userdata'), { recursive: true, force: true })
+    if (fs.existsSync(ORIGINAL)) {
+      const orig = JSON.parse(fs.readFileSync(ORIGINAL, 'utf8'))
+      const target = fs.existsSync(orig.path) ? orig.path : orig.copy
+      try { setWallpaper(target); console.log('restored wallpaper: ' + target) } catch (err) { console.error('warn: wallpaper restore failed:', err.message) }
+    } else {
+      console.error('warn: no saved original wallpaper; not restored')
+    }
+    console.log('artifacts kept at ' + path.join(dir, 'artifacts'))
+  }
+}
+
+function bridgeCall (cmd, args) {
+  return `new Promise((resolve, reject) => {
+    const id = 900000 + Math.floor(Math.random() * 99999)
+    const t = setTimeout(() => reject(new Error('bridge timeout')), 10000)
+    window.bridgeTransport.onMessage((m) => { if (m.t === 'res' && m.id === id) { clearTimeout(t); m.ok ? resolve(m.value) : reject(new Error(m.error)) } })
+    window.bridgeTransport.send({ t: 'req', id, cmd: ${JSON.stringify(cmd)}, args: ${JSON.stringify(args)} })
+  })`
+}
+
+// Kill only the process group we spawned: SIGTERM lets Electron run its
+// before-quit handler (worker gets {t:'shutdown'}); SIGKILL after 5s.
+async function stopInst (inst) {
+  const groupAlive = () => { try { process.kill(-inst.pgid, 0); return true } catch { return false } }
+  if (!groupAlive()) return
+  try { process.kill(inst.pid, 'SIGTERM') } catch {}
+  for (let i = 0; i < 50 && groupAlive(); i++) await sleep(100)
+  if (groupAlive()) { try { process.kill(-inst.pgid, 'SIGKILL') } catch {} ; await sleep(300) }
+  if (groupAlive()) console.error(`warn: process group ${inst.pgid} (${inst.name}) still alive`)
+}
+
+const [cmd, ...args] = process.argv.slice(2)
+if (!commands[cmd]) {
+  console.log('usage: pw <start-run|launch|doctor|text|click|fill|file|wait|read|state|shot|eval|wallpaper|fixture|hash|stop|cleanup> ...')
+  process.exit(cmd ? 1 : 0)
+}
+commands[cmd](...args).catch((err) => die(err.stack || err.message))

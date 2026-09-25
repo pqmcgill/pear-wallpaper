@@ -1,0 +1,38 @@
+TAP version 13
+
+# desktop receive loop: two queued sends end with the OLDER one on the desktop
+    # setWallpaper calls in order: SECOND -> FIRST
+    not ok 1 - the newest send is what ends up on the desktop
+      ---
+      actual: FIRST
+      expected: SECOND
+      operator: is
+      source: |
+          t.comment('setWallpaper calls in order: ' + applied.map(label).join(' -> '))
+          t.is(label(applied[applied.length - 1]), 'SECOND', 'the newest send is what ends up on the desktop')
+        ----^
+          const sends = await creator.listSends()
+          t.comment('creator sees: ' + sends.map((s) => (s.id === first.id ? 'first=' : 'second=') + s.targets[0].status).join(', '))
+      stack: ./test/sandbox/core-logic/desktop-regress.test.js:32:5
+      ...
+    # creator sees: second=delivered, first=delivered
+    not ok 2 - should be equal
+      ---
+      actual: delivered
+      expected: superseded
+      operator: is
+      source: |
+          t.comment('creator sees: ' + sends.map((s) => (s.id === first.id ? 'first=' : 'second=') + s.targets[0].status).join(', '))
+          t.is(sends.find((s) => s.id === first.id).targets[0].status, 'superseded')
+        ----^
+        })
+      stack: ./test/sandbox/core-logic/desktop-regress.test.js:35:5
+      ...
+not ok 1 - desktop receive loop: two queued sends end with the OLDER one on the desktop # time = 1687.884625ms
+
+1..1
+# tests = 0/1 pass
+# asserts = 0/2 pass
+# time = 1739.951708ms
+
+# not ok

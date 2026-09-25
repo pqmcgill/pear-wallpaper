@@ -1,0 +1,25 @@
+TAP version 13
+
+# receiver that missed 3 sends ends on the newest wallpaper
+    # sent in order: b1472f4faa88dc939dee5a01b1828674, 319189fbe0a8f94fa5d72901d423c571, 881d206cc3d083c5149275f2ad4d6fab
+    # setWallpaper calls in order: 881d206cc3d083c5149275f2ad4d6fab.png, 319189fbe0a8f94fa5d72901d423c571.png, b1472f4faa88dc939dee5a01b1828674.png
+    # sender statuses: 881d206cc3d083c5149275f2ad4d6fab=delivered, 319189fbe0a8f94fa5d72901d423c571=superseded, b1472f4faa88dc939dee5a01b1828674=superseded
+    not ok 1 - final wallpaper is the newest send
+      ---
+      actual: b1472f4faa88dc939dee5a01b1828674.png
+      expected: 881d206cc3d083c5149275f2ad4d6fab.png
+      operator: is
+      source: |
+          t.comment('sender statuses: ' + creatorView.map((s) => s.id + '=' + s.targets[0].status).join(', '))
+          t.is(calls[calls.length - 1], ids[2] + '.png', 'final wallpaper is the newest send')
+        ----^
+          t.is(calls.length, 1, 'stale queued sends are skipped (spec: targets act only on the latest)')
+        })
+      stack: ./test/sandbox/bridge-desktop/apply-order.test.js:26:5
+      ...
+    not ok 2 - stale queued sends are skipped (spec: targets act only on the latest)
+      ---
+      actual: 3
+      expected: 1
+      operator: is
+      source: |

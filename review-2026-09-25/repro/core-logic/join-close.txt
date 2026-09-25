@@ -1,0 +1,54 @@
+TAP version 13
+
+# clean close() during a pending join drops the persisted pending-invite
+    ok 1 - should be equal
+    ok 2 - persisted while in flight
+    # pending-invite after clean close + reopen: null
+    not ok 3 - pending-invite survives a clean close so restart can resume
+      ---
+      operator: ok
+      source: |
+          t.comment('pending-invite after clean close + reopen: ' + JSON.stringify(pending))
+          t.ok(pending !== null, 'pending-invite survives a clean close so restart can resume')
+        ----^
+          await new Promise((r) => setTimeout(r, 200))
+          t.comment('groupStatus after reopen: ' + joiner2.groupStatus)
+      stack: ./test/sandbox/core-logic/join-close.test.js:28:5
+      ...
+    # groupStatus after reopen: none
+    not ok 4 - join resumed on restart
+      ---
+      actual: none
+      expected: joining
+      operator: is
+      source: |
+          t.comment('groupStatus after reopen: ' + joiner2.groupStatus)
+          t.is(joiner2.groupStatus, 'joining', 'join resumed on restart')
+        ----^
+        })
+      stack: ./test/sandbox/core-logic/join-close.test.js:31:5
+      ...
+not ok 1 - clean close() during a pending join drops the persisted pending-invite # time = 897.523083ms
+
+# groupStatus right after ready() on a resumed join
+    # groupStatus immediately after ready(): none; one tick later: joining
+    not ok 1 - README: joining while a join resumed on restart is in flight
+      ---
+      actual: none
+      expected: joining
+      operator: is
+      source: |
+          t.comment(`groupStatus immediately after ready(): ${immediate}; one tick later: ${afterTick}`)
+          t.is(immediate, 'joining', 'README: joining while a join resumed on restart is in flight')
+        ----^
+        })
+      stack: ./test/sandbox/core-logic/join-close.test.js:55:5
+      ...
+not ok 2 - groupStatus right after ready() on a resumed join # time = 169.138709ms
+
+1..2
+# tests = 0/2 pass
+# asserts = 2/5 pass
+# time = 1893.895959ms
+
+# not ok

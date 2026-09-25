@@ -1,0 +1,23 @@
+TAP version 13
+
+# first ack after the sender restarts: send-updated fires
+    # updates seen since reopen before the ack: 0
+    # send-updated ids after the ack: [] (update events total: 1)
+    not ok 1 - send-updated fired for the first ack after restart
+      ---
+      operator: ok
+      source: |
+          t.comment('send-updated ids after the ack: ' + JSON.stringify(got) + ' (update events total: ' + updates + ')')
+          t.ok(got.includes(id), 'send-updated fired for the first ack after restart')
+        ----^
+        })
+      stack: ./test/sandbox/core-logic/restart-events.test.js:36:5
+      ...
+not ok 1 - first ack after the sender restarts: send-updated fires # time = 1018.765084ms
+
+1..1
+# tests = 0/1 pass
+# asserts = 0/1 pass
+# time = 1235.140042ms
+
+# not ok

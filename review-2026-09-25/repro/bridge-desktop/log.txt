@@ -1,0 +1,7 @@
+1790366529104 main started pid 68852
+1790366530174 worker isEnabled=true
+1790366530175 worker calling disable
+1790366530193 main SIGTERM
+1790366530196 worker disable returned; plist exists=false
+1790366530199 main worker exit 0 null
+1790366532195 main exiting after grace

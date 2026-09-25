@@ -1,0 +1,24 @@
+TAP version 13
+
+# a send that lands while the receive sweep is fetching is never announced
+    # update events (ms): [1,8,289]
+    # wallpaper events: FIRST@291ms
+    # pendingWallpaper now: SECOND
+    not ok 1 - newest send announced within 15s of landing
+      ---
+      operator: ok
+      source: |
+          t.comment('pendingWallpaper now: ' + label(((await joiner.pendingWallpaper()) || {}).id))
+          t.ok(seen.some((s) => s.id === second.id), 'newest send announced within 15s of landing')
+        ----^
+        })
+      stack: ./test/sandbox/core-logic/dropped-update2.test.js:39:5
+      ...
+not ok 1 - a send that lands while the receive sweep is fetching is never announced # time = 15956.525875ms
+
+1..1
+# tests = 0/1 pass
+# asserts = 0/1 pass
+# time = 16017.509791ms
+
+# not ok

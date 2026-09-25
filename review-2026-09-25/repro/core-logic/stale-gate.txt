@@ -1,0 +1,36 @@
+TAP version 13
+
+# a restarted member keeps replicating with a revoked device after learning of the removal
+    ok 1 - c is connected and replicating with b2 on the stale roster
+    # b2 roster size: 2; roster-changed events on b2: 2
+    # c still in b2._connections: true; still replicating: true
+    not ok 2 - b2 dropped the revoked device once it learned of the removal
+      ---
+      operator: absent
+      source: |
+          t.comment('c still in b2._connections: ' + !!conn + '; still replicating: ' + (conn ? b2._replicating.has(conn) : false))
+          t.absent(conn, 'b2 dropped the revoked device once it learned of the removal')
+        ----^
+        
+          // Does the revoked device keep seeing new group traffic through b2?
+      stack: ./test/sandbox/core-logic/stale-gate.test.js:41:5
+      ...
+    # revoked c received the new send op via b2: true
+    not ok 3 - a revoked device must not receive post-revocation ops
+      ---
+      operator: absent
+      source: |
+          t.comment('revoked c received the new send op via b2: ' + leaked)
+          t.absent(leaked, 'a revoked device must not receive post-revocation ops')
+        ----^
+        })
+      stack: ./test/sandbox/core-logic/stale-gate.test.js:51:5
+      ...
+not ok 1 - a restarted member keeps replicating with a revoked device after learning of the removal # time = 2858.668792ms
+
+1..1
+# tests = 0/1 pass
+# asserts = 1/3 pass
+# time = 2915.945625ms
+
+# not ok

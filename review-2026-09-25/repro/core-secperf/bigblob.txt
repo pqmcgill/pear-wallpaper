@@ -1,0 +1,26 @@
+TAP version 13
+
+# bigblob: 64 MB non-image from a member is fetched by the target and the relay, fully buffered
+    # before: du a=252 KB b=65872 KB c=276 KB
+    # target a materialized in 2015 ms; file=64.0 MB at /private/var/folders/mx/90cch_fn77vgy_tj4xxfcgpr0000gn/T/tmp-test-ae3bbfd80e37b/received/big1.png
+    # process delta while materializing: rss 413.7 MB external 252.5 MB arrayBuffers 252.8 MB
+    ok 1 - target wrote all 64 MB (no receive-side cap, meta.byteLength said 12)
+    # after : du a=131600 KB b=65880 KB c=65944 KB
+    ok 2 - relay c downloaded the full 64 MB blob too
+ok 1 - bigblob: 64 MB non-image from a member is fetched by the target and the relay, fully buffered # time = 5293.187625ms
+
+# growth: blobs and received files are never garbage collected
+    # before: du a=248 KB b=276 KB c=276 KB
+    # after 10 x 1 MB sends a->b, all acked by b:
+    #   du a=11460 KB b=22672 KB c(relay, not a target)=12388 KB
+    #   b/received has 10 files, 10280 KB
+    #   b listReceived({limit:10}) rows=10
+    ok 1 - expected truthy value
+ok 2 - growth: blobs and received files are never garbage collected # time = 4691.594208ms
+
+1..2
+# tests = 2/2 pass
+# asserts = 3/3 pass
+# time = 10042.107625ms
+
+# ok

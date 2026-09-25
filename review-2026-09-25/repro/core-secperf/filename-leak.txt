@@ -1,0 +1,13 @@
+TAP version 13
+
+# meta.filename: the sender's absolute local path replicates to every member
+    # joiner sees meta = {"ext":".png","byteLength":108,"filename":"/private/var/folders/mx/90cch_fn77vgy_tj4xxfcgpr0000gn/T/tmp-test-748226b01e2ee/Family Photos/patrick-beach-2026.png"}
+    ok 1 - should be equal
+ok 1 - meta.filename: the sender's absolute local path replicates to every member # time = 693.690125ms
+
+1..1
+# tests = 1/1 pass
+# asserts = 1/1 pass
+# time = 747.109667ms
+
+# ok

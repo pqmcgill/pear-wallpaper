@@ -1,0 +1,47 @@
+TAP version 13
+
+# after acking the newest send, the older unacked one resurfaces (pull path)
+    # pendingWallpaper after acking second: FIRST (older)
+    not ok 1 - nothing pending: the older send was superseded
+      ---
+      actual: 
+        id: 0e28869ca395d9812f1e6a48be16a77d
+        filePath: /private/var/folders/mx/90cch_fn77vgy_tj4xxfcgpr0000gn/T/tmp-test-25b7faedae396/received/0e28869ca395d9812f1e6a48be16a77d.png
+        fromKey: 40b48b570c12ea6e11e13d23b59a4039db5825f0c00560e35b01a3466521c5eb
+        meta: 
+          ext: .png
+          byteLength: 4096
+          filename: null
+      expected: null
+      operator: is
+      source: |
+          t.comment('pendingWallpaper after acking second: ' + (next && (next.id === first.id ? 'FIRST (older)' : next.id)))
+          t.is(next, null, 'nothing pending: the older send was superseded')
+        ----^
+        })
+      stack: ./test/sandbox/core-logic/regress.test.js:24:5
+      ...
+not ok 1 - after acking the newest send, the older unacked one resurfaces (pull path) # time = 920.943834ms
+
+# after acking the newest send, the older unacked one is emitted as a wallpaper event (push path)
+    # wallpaper events seen 3s after both sends landed: FIRST
+    not ok 1 - the newest send is announced (desktop is event-driven)
+      ---
+      operator: ok
+      source: |
+          t.comment('wallpaper events seen 3s after both sends landed: ' + seen.map((id) => id === first.id ? 'FIRST' : id === second.id ? 'SECOND' : id).join(','))
+          t.ok(seen.includes(second.id), 'the newest send is announced (desktop is event-driven)')
+        ----^
+          if (seen.includes(second.id)) {
+            await joiner.markApplied(second.id)
+      stack: ./test/sandbox/core-logic/regress.test.js:37:5
+      ...
+    # creator sees first as: pending
+not ok 2 - after acking the newest send, the older unacked one is emitted as a wallpaper event (push path) # time = 3883.67575ms
+
+1..2
+# tests = 0/2 pass
+# asserts = 0/2 pass
+# time = 4857.116417ms
+
+# not ok

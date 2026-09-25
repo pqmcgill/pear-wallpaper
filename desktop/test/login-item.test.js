@@ -7,25 +7,32 @@ const { promisify } = require('util')
 const execFileP = promisify(execFile)
 const { createLoginItem } = require('../lib/login-item.js')
 
-test('enable writes a LaunchAgent that RunAtLoad-fires, isEnabled reflects it, disable removes it', async (t) => {
+const domain = `gui/${process.getuid()}`
+const loaded = (label) => execFileP('launchctl', ['print', `${domain}/${label}`]).then(() => true, () => false)
+
+test('enable and disable only change the plist; the launchd job is left alone until next login', async (t) => {
   const dir = await tmp(t)
   const marker = path.join(dir, 'ran.txt')
   const label = 'com.pearwallpaper.test.' + process.pid
-  const li = createLoginItem({
-    dir,
-    label,
-    programArguments: ['/usr/bin/touch', marker],
-    exec: (cmd, args) => execFileP(cmd, args)
-  })
+  const plist = path.join(dir, label + '.plist')
+  t.teardown(() => execFileP('launchctl', ['bootout', `${domain}/${label}`]).catch(() => {}))
+  const li = createLoginItem({ dir, label, programArguments: ['/usr/bin/touch', marker] })
+
   t.absent(await li.isEnabled(), 'not enabled initially')
   await li.enable()
-  await new Promise((r) => setTimeout(r, 800)) // let launchd RunAtLoad fire
-  t.ok(fs.existsSync(marker), 'RunAtLoad executed the program')
-  t.ok(await li.isEnabled(), 'isEnabled true after enable')
-  t.ok(fs.existsSync(path.join(dir, label + '.plist')), 'plist written')
+  await li.enable()
+  t.ok(await li.isEnabled(), 'isEnabled true after enable, twice')
+  const body = fs.readFileSync(plist, 'utf8')
+  t.ok(body.includes('<key>RunAtLoad</key><true/>'), 'plist runs the app at login')
+  t.ok(body.includes(`<string>${marker}</string>`), 'plist carries the program arguments')
+  await new Promise((resolve) => setTimeout(resolve, 800))
+  t.absent(fs.existsSync(marker), 'enable did not start a second copy now')
+  t.absent(await loaded(label), 'enable did not load the job into launchd')
+
   await li.disable()
-  t.absent(await li.isEnabled(), 'isEnabled false after disable')
-  t.absent(fs.existsSync(path.join(dir, label + '.plist')), 'plist removed')
+  await li.disable()
+  t.absent(await li.isEnabled(), 'isEnabled false after disable, twice')
+  t.absent(fs.existsSync(plist), 'plist removed')
 })
 
 test('enable() rejects when programArguments is empty', async (t) => {

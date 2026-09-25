@@ -16,7 +16,7 @@
 // fs/path/os/util/child_process to their bare-* equivalents (mirroring the
 // same trick already used by ../../core/package.json for fs/path) for any
 // module specifier require, and lib/compat/process.js polyfills the
-// `process` global that lib/platform/index.js and lib/login-item.js read
+// `process` global that lib/platform/index.js reads
 // directly (a global identifier can't be caught by the "imports" remap,
 // which only intercepts require() specifiers). Load it first, before any
 // reused module that touches `process`.

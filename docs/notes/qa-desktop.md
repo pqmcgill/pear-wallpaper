@@ -166,9 +166,8 @@ and 10 exercise but call out explicitly here:
   call) actually changes the wallpaper (Act 3/4 above) — i.e. `execFile`'s
   success branch in the shim resolves `{ stdout, stderr }` correctly, not
   just its error branch.
-- `setLoginAtLogin(true)` (Act 10 below) actually writes+bootstraps the
-  plist via `launchctl` invoked from inside the worker, not just
-  `enable()`'s call resolving without throwing.
+- `setLoginAtLogin(true)` (Act 10 below) actually writes the plist from
+  inside the worker, not just `enable()`'s call resolving without throwing.
 
 If either only ever appears to work by never throwing (rather than the OS
 effect actually happening), that's this gap, not a false pass.
@@ -241,10 +240,12 @@ cat ~/Library/LaunchAgents/com.pear-wallpaper.plist
 executable** (`.../Pear Wallpaper.app/Contents/MacOS/Pear Wallpaper` —
 whatever `app.getPath('exe')` resolved to for that copy), *not* a `pear`
 binary or `pear://` link — that's the post-pivot change from the old
-`pear run pear://<key>` target. `launchctl print
-gui/$(id -u)/com.pear-wallpaper` should report it loaded. Toggle off and
-confirm the plist is removed (`launchctl bootout` + unlink, per
-`lib/login-item.js`, reused unmodified).
+`pear run pear://<key>` target. Toggling on must not open a second copy,
+and `launchctl print gui/$(id -u)/com.pear-wallpaper` should still report
+"Could not find service": launchd only loads the plist at the next login.
+Toggle off and confirm the plist is removed and the app keeps running.
+Then log out and back in with the toggle on: the app should start, and
+toggling it off from that login-launched copy must not quit it.
 
 ## Act 11 — OTA (MUST-SMOKE)
 

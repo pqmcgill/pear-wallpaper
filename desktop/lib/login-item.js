@@ -1,9 +1,6 @@
 const fs = require('fs')
 const path = require('path')
 const os = require('os')
-const { execFile } = require('child_process')
-const { promisify } = require('util')
-const execFileP = promisify(execFile)
 
 const defaultDir = path.join(os.homedir(), 'Library', 'LaunchAgents')
 
@@ -28,27 +25,27 @@ ${args}
 `
 }
 
+// Only the plist file is touched: launchd loads ~/Library/LaunchAgents at the
+// next login. Bootstrapping now would start a second copy (RunAtLoad), and
+// booting out would SIGTERM the running app when it was itself launched by
+// this job.
 function createLoginItem ({
-  exec = (cmd, args) => execFileP(cmd, args),
   dir = defaultDir,
   label = 'com.pear-wallpaper',
   programArguments
 } = {}) {
   const plistPath = path.join(dir, label + '.plist')
-  const domain = `gui/${process.getuid()}`
   return {
     async enable () {
       if (!programArguments || !programArguments.length) throw new Error('programArguments required to enable')
       await fs.promises.mkdir(dir, { recursive: true })
       await fs.promises.writeFile(plistPath, plistBody(label, programArguments))
-      await exec('launchctl', ['bootstrap', domain, plistPath])
     },
     async disable () {
-      try { await exec('launchctl', ['bootout', `${domain}/${label}`]) } catch {}
-      try { await fs.promises.unlink(plistPath) } catch {}
+      await fs.promises.rm(plistPath, { force: true })
     },
     async isEnabled () {
-      try { await exec('launchctl', ['print', `${domain}/${label}`]); return true } catch { return false }
+      try { await fs.promises.access(plistPath); return true } catch { return false }
     }
   }
 }

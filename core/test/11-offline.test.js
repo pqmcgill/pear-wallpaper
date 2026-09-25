@@ -66,7 +66,7 @@ test('sync: first-update floor waits past the quiet window for in-flight replica
 // I2 regression. sync() is the Android shell's ONLY receive opportunity.
 // A single blob nobody can serve used to eat the whole budget: relay ran
 // before the receive step, and both steps were silently skipped whenever a
-// prior update-driven sweep was still in flight (_relaying / _applyBusy).
+// prior update-driven sweep was still in flight (the relay and receive gates).
 // Here the joiner's event-driven receive sweep is deliberately wedged on an
 // unfetchable blob (30s bound) before a perfectly fetchable wallpaper
 // arrives — only sync() can deliver it.
@@ -83,7 +83,7 @@ test('sync: an unfetchable blob does not starve the receive step', async functio
   })
   await creator._append(stuck)
   await until(joiner, 'update', async () => (await joiner.base.view.get(k.send(stuck.id))) !== null)
-  await until(joiner, 'update', () => joiner._applyBusy === true, 5000)
+  await until(joiner, 'update', () => joiner._receiveGate.busy === true, 5000)
 
   let got = null
   joiner.on('wallpaper', (entry) => { got = entry })
@@ -92,4 +92,30 @@ test('sync: an unfetchable blob does not starve the receive step', async functio
   await joiner.sync({ timeoutMs: 15000 })
   t.ok(got !== null, 'sync() ran its receive step despite the stalled blob')
   t.is(got && got.id, id, 'and delivered the fetchable wallpaper, not the stuck one')
+})
+
+// #3 regression, relay side. Same drop-not-queue shape as the receive
+// sweep: a send that landed while b's relay sweep was mid-fetch was not
+// fetched until some later op re-triggered the sweep. b is not a target,
+// so its only blobs.get calls are the relay's.
+test('relay: a send that lands mid-sweep is fetched once the sweep finishes', async function (t) {
+  const { a, b, c } = await trio(t)
+  const get = b.blobs.get.bind(b.blobs)
+  let release
+  const gate = new Promise((resolve) => { release = resolve })
+  let fetches = 0
+  b.blobs.get = async (ref, opts) => {
+    if (++fetches === 1) await gate
+    return get(ref, opts)
+  }
+
+  await a.sendWallpaper(fakePng(), [c.deviceKey])
+  await until(b, 'update', () => fetches === 1)
+  const { id } = await a.sendWallpaper(fakePng(8192), [c.deviceKey])
+  await until(b, 'update', async () => (await b.base.view.get(k.send(id))) !== null)
+  release()
+
+  const { blob } = (await b.base.view.get(k.send(id))).value
+  await until(b, 'update', () => b.blobs.has(blob)).catch(() => {})
+  t.ok(await b.blobs.has(blob), 'relay holds the send that landed while it was busy')
 })

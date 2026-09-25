@@ -20,6 +20,25 @@ const INVITE_TTL_MS = 24 * 60 * 60 * 1000
 
 function noop() {}
 
+// Run `run` at most once at a time. A call that arrives while one is in
+// flight marks the gate dirty, and the sweep runs once more when it
+// finishes, so an op that landed mid-sweep is picked up right away instead
+// of waiting for some unrelated op to trigger the next one. A rejected run
+// (the routine "no peer can serve this blob yet" case) must not skip that
+// re-run, so it is swallowed here rather than at the call site.
+async function sweep(gate, run) {
+  if (gate.busy) { gate.dirty = true; return }
+  gate.busy = true
+  try {
+    do {
+      gate.dirty = false
+      await run().catch(noop)
+    } while (gate.dirty)
+  } finally {
+    gate.busy = false
+  }
+}
+
 class WallpaperCore extends ReadyResource {
   constructor({ storageDir, deviceName, bootstrap = null }) {
     super()
@@ -45,12 +64,12 @@ class WallpaperCore extends ReadyResource {
     this._joining = false
     this._activeJoin = null // { invite, candidate, candidateReady, reject, promise } while joinGroup is in flight
     this._deviceKey = null
-    this._applyBusy = false
+    this._receiveGate = { busy: false, dirty: false } // see sweep()
     this._lastEmitted = null
     this._materializing = new Map() // send id -> in-flight _materialize promise
     this._lastDevices = null // Task 10: cached device-row keys, for diffing on update
     this._lastAcks = null // Task 10: cached ack-row keys, for diffing on update
-    this._relaying = false // Task 11: reentrancy guard against stacked _relayBlobs sweeps
+    this._relayGate = { busy: false, dirty: false } // see sweep()
   }
 
   get deviceKey() {
@@ -404,13 +423,11 @@ class WallpaperCore extends ReadyResource {
     this._lastAcks = acks
   }
 
-  // Called on every base update (wired in _boot). Coalescing wrapper: a
+  // Called on every base update (wired in _boot). Coalesced (see sweep): a
   // burst of updates must not stack sweeps, each doing a bounded-but-slow
   // blobs.get. sync() deliberately does NOT come through here — see _receive.
   _checkIncoming() {
-    if (this._applyBusy) return Promise.resolve()
-    this._applyBusy = true
-    return this._receive().finally(() => { this._applyBusy = false })
+    return sweep(this._receiveGate, () => this._receive())
   }
 
   // One receive sweep: materialize the newest send addressed to us that we
@@ -433,17 +450,21 @@ class WallpaperCore extends ReadyResource {
     this.emit('wallpaper', { id: entry.id, filePath, fromKey: entry.from, meta: entry.meta })
   }
 
-  // Newest send targeting us that we haven't acked yet — "unapplied" here
-  // means "no ack/<id>/<us> record", not "not yet materialized to disk"
+  // The newest send targeting us, or null once we've acked it. "Newest" is
+  // over every send to us, acked or not: acking send n retires every older
+  // send at once (the sender reads them as superseded, see _targetStatus),
+  // so an older un-acked send must never come back here. "Unapplied" means
+  // "no ack/<id>/<us> record", not "not yet materialized to disk"
   // (materialization is idempotent and re-checked in _materialize itself).
   async _newestUnappliedForMe() {
     let newest = null
     for await (const node of this.base.view.createReadStream({ gte: 'send/', lt: 'send0' })) {
       const s = node.value
       if (!s.targets.includes(this.deviceKey)) continue
-      if ((await this.base.view.get(k.ack(s.id, this.deviceKey))) !== null) continue
       if (newest === null || s.seq > newest.seq) newest = s
     }
+    if (newest === null) return null
+    if ((await this.base.view.get(k.ack(newest.id, this.deviceKey))) !== null) return null
     return newest
   }
 
@@ -506,33 +527,30 @@ class WallpaperCore extends ReadyResource {
   // device can serve them to targets later. This is what makes any
   // online member a relay (spec §5).
   //
-  // Reentrancy guard (controller-sanctioned deviation from the brief):
-  // this is wired to 'update' AND called from sync(), so a burst of base
-  // updates (e.g. replicating several ops in quick succession) could stack
-  // multiple full-relay sweeps concurrently, each doing a bounded-but-slow
-  // blobs.get() per un-acked send. A single in-flight sweep is enough —
-  // later 'update's will trigger their own sweep once this one finishes.
-  async _relayBlobs() {
+  // Coalesced (see sweep): this is wired to 'update' AND called from
+  // sync(), so a burst of base updates (e.g. replicating several ops in
+  // quick succession) would otherwise stack multiple full-relay sweeps
+  // concurrently, each doing a bounded-but-slow blobs.get() per un-acked
+  // send.
+  _relayBlobs() {
+    return sweep(this._relayGate, () => this._relayOnce())
+  }
+
+  async _relayOnce() {
     if (this.base === null || this.blobs === null || !this.blobs.local) return
-    if (this._relaying) return
-    this._relaying = true
-    try {
-      for await (const node of this.base.view.createReadStream({ gte: 'send/', lt: 'send0' })) {
-        const s = node.value
-        let done = true
-        for (const target of s.targets) {
-          if ((await this.base.view.get(k.ack(s.id, target))) === null) done = false
-        }
-        if (done) continue
-        // Already hold every block? Nothing to fetch. Without this, each
-        // update re-ran a full (bounded, but up-to-30s-per-blob) download
-        // for blobs already on disk, and re-swept forever-unacked sends to
-        // revoked devices for the life of the group.
-        if (await this.blobs.has(s.blob)) continue
-        await this.blobs.get(s.blob, { timeoutMs: 30000 }).catch(() => {}) // bounded best effort; retried next sync
+    for await (const node of this.base.view.createReadStream({ gte: 'send/', lt: 'send0' })) {
+      const s = node.value
+      let done = true
+      for (const target of s.targets) {
+        if ((await this.base.view.get(k.ack(s.id, target))) === null) done = false
       }
-    } finally {
-      this._relaying = false
+      if (done) continue
+      // Already hold every block? Nothing to fetch. Without this, each
+      // update re-ran a full (bounded, but up-to-30s-per-blob) download
+      // for blobs already on disk, and re-swept forever-unacked sends to
+      // revoked devices for the life of the group.
+      if (await this.blobs.has(s.blob)) continue
+      await this.blobs.get(s.blob, { timeoutMs: 30000 }).catch(() => {}) // bounded best effort; retried next sync
     }
   }
 

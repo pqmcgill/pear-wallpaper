@@ -6,7 +6,7 @@ On first launch the app shows Onboarding. Choosing `Create a group` makes this d
 
 - `onboarding-render`: a fresh device shows the title, `Create a group`, the `Paste invite` input, and `Join a group`.
 - `create-group`: creating a group routes to MainView with this device marked `(this device) · creator`.
-- `create-inline-invite`: after creating, Onboarding is meant to show an invite and QR under the button (see Gotchas).
+- `create-first-invite`: right after creating, the Devices tab makes an invite and shows it with a one-line instruction and a QR code.
 
 ## How to get to it (user POV)
 
@@ -21,10 +21,11 @@ Preconditions:
 
 - **Onboarding renders.** Look at the first screen. Run `pw shot a onboarding`. The `.txt` contains `Pear Wallpaper`, `Create a group`, and `Join a group`.
 - **Create.** Click the button. Run `pw click a "Create a group"`, then `pw wait a "(this device) · creator" 30`. The screen shows the tabs `Devices Send Received Settings` and one roster row, `verify-a (this device) · creator`.
+- **First invite.** Run `pw read a ".invite-block code"`. It prints the invite without any extra click, and the invite wraps inside the 480 px window.
 - **Proof.** Run `pw shot a created` and `pw state a`. The state has `groupStatus: "member"`, a roster of 1, and `isCreator: true` on self.
 
 ## Gotchas
 
-- The invite that Onboarding renders under `Create a group` is never visible. The worker's `state` push routes to MainView as soon as `createGroup` resolves, which unmounts Onboarding before `createInvite` returns. `docs/notes/qa-desktop.md` Act 2 still says the invite appears inline. That's wrong: get the invite from Devices → `Create invite` (see [pairing](./pairing.md)). Tracked as issue #20.
+- `Join a group` stays disabled until the invite box has text, so a click on it before `pw fill` fails as disabled.
 - `getState` reports `online: false` for self, and the online dot renders at zero width on every row, so online status can't be seen on screen (issue #15). Neither is a failed check.
 - Verified live on 2026-09-25 (maintenance pass): onboarding render, create, and a roster of 1 with `isCreator: true`.

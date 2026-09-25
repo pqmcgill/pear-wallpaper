@@ -7,3 +7,4 @@ android/app/gen/
 android/android/
 android/ios/
 android/.expo/
+.verify-runs/

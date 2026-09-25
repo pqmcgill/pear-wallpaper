@@ -71,3 +71,33 @@ test('syncNow(): calls core.sync then applyPending and updates lastSync', async 
   t.alike(core.applied, ['s4'])
   t.ok(typeof eng.lastSync === 'number')
 })
+
+test("syncNow(): emits 'synced' after lastSync is stamped", async (t) => {
+  const core = fakeCore([])
+  const eng = createSyncEngine({ core, platform: fakePlatform() })
+  const seen = []; eng.on('synced', () => seen.push(eng.lastSync))
+  await eng.syncNow()
+  t.is(seen.length, 1)
+  t.is(seen[0], eng.lastSync)
+})
+
+test('syncNow(): a failed core.sync does not stamp lastSync or emit synced', async (t) => {
+  const core = fakeCore([])
+  core.sync = async () => { throw new Error('sync boom') }
+  const eng = createSyncEngine({ core, platform: fakePlatform() })
+  eng.on('error', () => {})
+  let synced = 0; eng.on('synced', () => synced++)
+  await eng.syncNow()
+  t.is(eng.lastSync, null)
+  t.is(synced, 0)
+})
+
+test("start(): a received wallpaper counts as a sync (stamps lastSync, emits 'synced')", async (t) => {
+  const core = fakeCore([])
+  const eng = createSyncEngine({ core, platform: null }); eng.start()
+  t.teardown(() => eng.stop())
+  let synced = 0; eng.on('synced', () => synced++)
+  core.emit('wallpaper', { id: 's5', filePath: '/r/s5.png' })
+  t.is(synced, 1)
+  t.ok(typeof eng.lastSync === 'number')
+})

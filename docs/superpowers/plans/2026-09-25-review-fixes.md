@@ -65,3 +65,17 @@ Order: issues first, while each issue's description still matches `main`, then s
 ### Step E: security hardening
 
 Tracked in private advisories until the fixes reach `main`. Units: validate `set-wallpaper` ops in `apply`, receiver-side blob limits, pairing key binding and invite storage, gate state after restart, desktop navigation and IPC-origin guards, and the Android backup policy.
+
+## Status (paused 2026-09-25)
+
+Merged into `dev`: A1-A9, C1, C2, D1, D2 (PRs #28-#38, #40, #41). 20 of 26 issues fixed on `dev`.
+
+Remaining, in order:
+- **B1** pending requests (#12, #13): not started (branch discarded).
+- **C3** garbage collection (#10): work in progress on `fix/c3-garbage-collection` (tests plus a partial change, pushed as a WIP commit; remove the `sandbox-gc-*` debug tests before finishing).
+- **B2** used invites (#14) plus #39 (approving an offline joiner burns the invite).
+- **Android emulator QA** for D1 and D2: partial (#20 and #24 walked, no report yet). Rerun from the D1/D2 walkthrough checks.
+- **Step E** security hardening, six units: not started.
+- Then the `dev` → `main` PR, with the owner's approval.
+
+Resume tooling (coordinator scratch, not committed): per-unit worktrees, an implementer brief, and a ship script that rebases on `dev`, reruns affected suites, adds the journal line, publishes evidence to `review-evidence/fixes/<unit>/`, opens and squash-merges the PR, and comments on the issues.

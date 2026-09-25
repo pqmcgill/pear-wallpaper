@@ -78,6 +78,12 @@ each section.
   picks it up. Desktop's tray icon (`trayTemplate.png`) and eventual
   `.app` icon could share the same artwork.
 
+- **Join-request notification** *(issue #21, from the 2026-09-25
+  review)*. The creator only learns of a join request if the window
+  happens to be open on the Devices tab. A macOS notification (and an
+  Android one) when a `candidate` event arrives would fix it. Deferred
+  from Plan 4 by owner decision.
+
 ## UX polish
 
 - **Make the app beautiful on all screen sizes.** Both shells are

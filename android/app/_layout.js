@@ -4,9 +4,6 @@ import { Slot, useRouter } from 'expo-router'
 import { useShareIntent } from 'expo-share-intent'
 import { reduce, initialSnapshot } from '../lib/store'
 import { getBridge, getWorklet } from '../lib/worklet-client'
-import { createApplyController } from '../lib/apply-controller'
-import { setWallpaper } from '../modules/wallpaper-setter'
-import { getTarget } from '../lib/settings'
 import { stageSharedImage } from '../lib/share-target'
 import * as TaskManager from 'expo-task-manager'
 import * as BackgroundTask from 'expo-background-task'
@@ -92,33 +89,23 @@ export default function Layout () {
   }, [])
 
   useEffect(() => {
-    // Single-writer rule, enforcement point 1: getBridge() is a module-level
-    // singleton (lib/worklet-client.js) — only ever one Worklet/corestore
-    // for the life of this provider.
+    // Single-writer rule: getBridge() (lib/worklet-client.js) claims the one
+    // worklet this process may have open, reusing a background round's if one
+    // is running. Its applyPending() is the one apply pass per worklet, shared
+    // with background nudges, and apply failures arrive as 'error' events.
     const bridge = getBridge()
     setBridge(bridge)
 
-    // getTarget (lib/settings.js, Task 7) reads the lock-screen toggle's
-    // persisted preference fresh on every apply pass — 'both' when the
-    // Settings tab's toggle is on, 'home' otherwise. Was hardcoded to
-    // `() => 'home'` before Task 7's settings module existed.
-    const controller = createApplyController({
-      bridge,
-      setter: setWallpaper,
-      getTarget,
-      onError: (err) => dispatch({ type: 'error', payload: { message: `Couldn't set the new wallpaper: ${err.message}` } })
-    })
-
     bridge.on('state', (payload) => {
       dispatch({ type: 'state', payload })
-      controller.applyPending()
+      bridge.applyPending()
     })
     bridge.on('error', (payload) => dispatch({ type: 'error', payload }))
 
     bridge.call('getState')
       .then((payload) => {
         dispatch({ type: 'state', payload })
-        controller.applyPending()
+        bridge.applyPending()
       })
       .catch((err) => dispatch({ type: 'error', payload: { message: err.message } }))
 

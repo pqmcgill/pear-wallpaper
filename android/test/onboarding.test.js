@@ -12,6 +12,9 @@ test('pressing "Create a group" calls bridge.call("createGroup")', async () => {
   await fireEvent.press(getByText('Create a group'))
 
   expect(bridge.call).toHaveBeenCalledWith('createGroup')
+  // The invite is shown on Devices, where the app lands once the group
+  // exists; minting one here raced this screen's unmount and was never seen.
+  expect(bridge.call).not.toHaveBeenCalledWith('createInvite')
 })
 
 test('typing an invite and pressing "Join a group" calls bridge.call("joinGroup", invite)', async () => {

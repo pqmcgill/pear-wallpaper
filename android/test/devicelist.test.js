@@ -55,3 +55,23 @@ test('a roster row\'s Remove press calls removeDevice(key) for every non-self de
   await fireEvent.press(getByText('Remove'))
   expect(bridge.call).toHaveBeenCalledWith('removeDevice', 'other-key')
 })
+
+test('a creator with no other devices sees an invite straight away, without pressing anything', async () => {
+  const bridge = fakeBridge({
+    call: jest.fn((cmd) => (cmd === 'createInvite' ? Promise.resolve('the-invite-string') : Promise.resolve()))
+  })
+  const alone = { roster: [snapshot.roster[0]] }
+  const { findByText, findByTestId } = await render(
+    <DeviceList bridge={bridge} snapshot={alone} candidates={[]} />
+  )
+
+  await findByText('the-invite-string')
+  await findByTestId('invite-qr')
+})
+
+test('a creator who already has other devices does not mint an invite until asked', async () => {
+  const bridge = fakeBridge()
+  await render(<DeviceList bridge={bridge} snapshot={snapshot} candidates={[]} />)
+
+  expect(bridge.call).not.toHaveBeenCalledWith('createInvite')
+})

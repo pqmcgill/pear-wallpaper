@@ -15,16 +15,26 @@ function fakeBridge (queue) {
 test('applies every pending item: setter then markApplied, in order', async () => {
   const bridge = fakeBridge([{ id: 'a', filePath: '/f/a.jpg' }, { id: 'b', filePath: '/f/b.jpg' }])
   const setter = jest.fn(async () => true)
-  await createApplyController({ bridge, setter, getTarget: () => 'home' }).applyPending()
+  await createApplyController({ bridge, setter, getTarget: () => 'home', onError: jest.fn() }).applyPending()
   expect(setter.mock.calls).toEqual([['/f/a.jpg', 'home'], ['/f/b.jpg', 'home']])
   expect(bridge.calls.filter(c => c[0] === 'markApplied')).toEqual([['markApplied', 'a'], ['markApplied', 'b']])
 })
 
-test('setter failure leaves the item unacked (retried next trigger)', async () => {
+test('setter failure leaves the item unacked (retried next trigger) and reports the error', async () => {
   const bridge = fakeBridge([{ id: 'a', filePath: '/f/a.jpg' }])
-  const setter = jest.fn(async () => { throw new Error('decode failed') })
-  await createApplyController({ bridge, setter, getTarget: () => 'home' }).applyPending()
+  const failure = new Error('WallpaperManager.setStream returned 0')
+  const setter = jest.fn(async () => { throw failure })
+  const onError = jest.fn()
+  await createApplyController({ bridge, setter, getTarget: () => 'home', onError }).applyPending()
   expect(bridge.calls.some(c => c[0] === 'markApplied')).toBe(false)
+  expect(onError).toHaveBeenCalledWith(failure)
+})
+
+test('a clean pass reports no error', async () => {
+  const bridge = fakeBridge([{ id: 'a', filePath: '/f/a.jpg' }])
+  const onError = jest.fn()
+  await createApplyController({ bridge, setter: jest.fn(async () => true), getTarget: () => 'home', onError }).applyPending()
+  expect(onError).not.toHaveBeenCalled()
 })
 
 test('concurrent triggers coalesce into one pass plus one queued rerun', async () => {
@@ -32,7 +42,7 @@ test('concurrent triggers coalesce into one pass plus one queued rerun', async (
   const bridge = { call: jest.fn((cmd) => cmd === 'pendingWallpaper'
     ? new Promise((r) => { resolvePending = r })
     : Promise.resolve(true)) }
-  const c = createApplyController({ bridge, setter: jest.fn(), getTarget: () => 'home' })
+  const c = createApplyController({ bridge, setter: jest.fn(), getTarget: () => 'home', onError: jest.fn() })
   const first = c.applyPending()
   c.applyPending(); c.applyPending()          // while first is in-flight
   resolvePending(null)

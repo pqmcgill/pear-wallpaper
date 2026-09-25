@@ -1,4 +1,4 @@
-import { render } from '@testing-library/react-native'
+import { render, act } from '@testing-library/react-native'
 
 // app/_layout.js's share-intent effect (Task 8) is the focus here: does a
 // throwing stageSharedImage() degrade to the error banner instead of
@@ -90,4 +90,15 @@ test('a successful stageSharedImage still navigates to /send with the staged pat
     pathname: '/send',
     params: { filePath: '/staged/photo.png' }
   })
+})
+
+test('a failed wallpaper apply reaches the error banner', async () => {
+  mockShareIntentState = { hasShareIntent: false, shareIntent: {}, resetShareIntent: mockResetShareIntent }
+  const { createApplyController } = require('../lib/apply-controller')
+
+  const { findByText } = await render(<Layout />)
+  const { onError } = createApplyController.mock.calls[0][0]
+  await act(async () => onError(new Error('WallpaperManager.setStream returned 0')))
+
+  await findByText(/Couldn't set the new wallpaper/)
 })

@@ -99,7 +99,12 @@ export default function Layout () {
     // persisted preference fresh on every apply pass — 'both' when the
     // Settings tab's toggle is on, 'home' otherwise. Was hardcoded to
     // `() => 'home'` before Task 7's settings module existed.
-    const controller = createApplyController({ bridge, setter: setWallpaper, getTarget })
+    const controller = createApplyController({
+      bridge,
+      setter: setWallpaper,
+      getTarget,
+      onError: (err) => dispatch({ type: 'error', payload: { message: `Couldn't set the new wallpaper: ${err.message}` } })
+    })
 
     bridge.on('state', (payload) => {
       dispatch({ type: 'state', payload })

@@ -23,6 +23,12 @@ import bundle from '../app/gen/worklet.bundle.mjs'
 // background execution window (and the corestore lock) open forever.
 const READY_TIMEOUT_MS = 30000
 
+// No UI to show it on in a headless round; the item stays unacked and the
+// foreground app surfaces the same failure on its next pass.
+function logApplyError (err) {
+  console.log('[background-sync] apply failed:', err && err.message)
+}
+
 export async function runBoundedSyncRound () {
   // Single-writer rule, enforcement point 2: existence, not readiness, is
   // the guard condition. isActive() (worklet-client.js) is true as soon as
@@ -37,7 +43,7 @@ export async function runBoundedSyncRound () {
   if (isActive()) {
     const bridge = getBridge()
     await bridge.call('syncNow')
-    await createApplyController({ bridge, setter: setWallpaper, getTarget }).applyPending()
+    await createApplyController({ bridge, setter: setWallpaper, getTarget, onError: logApplyError }).applyPending()
     return 'nudged-resident'
   }
 
@@ -75,7 +81,7 @@ export async function runBoundedSyncRound () {
     }
 
     await bridge.call('syncNow')
-    await createApplyController({ bridge, setter: setWallpaper, getTarget }).applyPending()
+    await createApplyController({ bridge, setter: setWallpaper, getTarget, onError: logApplyError }).applyPending()
     return 'synced'
   } finally {
     transport.send({ t: 'shutdown' })                  // graceful corestore close...

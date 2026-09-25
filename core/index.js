@@ -69,7 +69,7 @@ class WallpaperCore extends ReadyResource {
     // under the same key. WeakSet so a dropped connection needs no cleanup.
     this._replicating = new WeakSet()
     this._joining = false
-    this._activeJoin = null // { invite, candidate, candidateReady, reject, promise } while joinGroup is in flight
+    this._activeJoin = null // { invite, candidate, candidateReady, reject, promise, interrupted } while a join is in flight
     this._deviceKey = null
     this._receiveGate = { busy: false, dirty: false } // see sweep()
     this._lastEmitted = null
@@ -108,7 +108,10 @@ class WallpaperCore extends ReadyResource {
 
     if (this.base === null) {
       const pending = await this.meta.get('pending-invite')
-      if (pending !== null) this.joinGroup(pending.invite).catch(() => this.emit('error-joining'))
+      // _startJoin, not joinGroup: joinGroup would park on ready() (we are
+      // still inside _open), leaving one tick after ready() resolves where
+      // a mid-join device reads groupStatus 'none'.
+      if (pending !== null) this._startJoin(pending.invite).catch(() => this.emit('error-joining'))
     }
   }
 
@@ -175,13 +178,18 @@ class WallpaperCore extends ReadyResource {
       if (this._activeJoin.invite === invite) return this._activeJoin.promise
       await this._supersede(this._activeJoin)
     }
+    return this._startJoin(invite)
+  }
 
+  // Marks the join in flight synchronously (groupStatus reads 'joining'
+  // from here on) and runs it.
+  _startJoin(invite) {
     let resolveCandidateReady, rejectCandidateReady
     const candidateReady = new Promise((resolve, reject) => {
       resolveCandidateReady = resolve
       rejectCandidateReady = reject
     })
-    const activeJoin = { invite, candidate: null, candidateReady, reject: null, promise: null }
+    const activeJoin = { invite, candidate: null, candidateReady, reject: null, promise: null, interrupted: false }
     this._activeJoin = activeJoin
     this._joining = true
     activeJoin.promise = this._runJoin(invite, activeJoin, resolveCandidateReady, rejectCandidateReady)
@@ -257,12 +265,15 @@ class WallpaperCore extends ReadyResource {
       // (_open's pending-invite replay) accumulates one per failed attempt.
       // Idempotent: the supersede path may already have closed it.
       if (activeJoin.candidate !== null) await activeJoin.candidate.close().catch(() => {})
+      // A close() is not a failure: the invite is still good, and the
+      // pending-invite record is what lets the next open resume this join.
+      // Only a real outcome (denied / used / expired / superseded) retires it.
       // A newer joinGroup() call may already have persisted its OWN
       // pending-invite by the time this stale attempt's cleanup runs
       // (e.g. under _close(), which doesn't serialize against a fresh
       // joinGroup() the way supersede does) — never delete a pending-
       // invite record that isn't this run's own.
-      await this._clearPendingInviteIfStillMine(invite)
+      if (!activeJoin.interrupted) await this._clearPendingInviteIfStillMine(invite)
       throw err
     } finally {
       this._joining = false
@@ -968,6 +979,7 @@ class WallpaperCore extends ReadyResource {
     if (this._activeJoin !== null) {
       const stale = this._activeJoin
       this._activeJoin = null
+      stale.interrupted = true // keep pending-invite: the next open resumes this join
       await this._settleJoin(stale, new Error('closed'))
     }
     if (this.pairing !== null) await this.pairing.close().catch(() => {})

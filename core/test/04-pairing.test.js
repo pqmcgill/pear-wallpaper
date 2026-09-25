@@ -228,3 +228,58 @@ test('pairing: joinGroup with a different invite supersedes the stale attempt', 
   await until(creator, 'pairing-request', () => candidateKey !== null, 8000)
   t.is(candidateKey, joiner.deviceKey, 'new join reaches the creator')
 })
+
+// #4 regression. Both shells quit through close(), and close() settles the
+// in-flight join with 'closed' — which used to take the same cleanup path as
+// a denial and delete the persisted pending-invite, so only a crash ever
+// resumed a join.
+test('pairing: a clean close keeps the pending invite and the next open resumes the join', async function (t) {
+  const tn = await makeTestnet(t)
+  const creator = new WallpaperCore({
+    storageDir: await tmpDir(t), deviceName: 'creator', bootstrap: tn.bootstrap
+  })
+  await creator.ready()
+  await creator.createGroup()
+  t.teardown(() => creator.close())
+  const invite = await creator.createInvite()
+
+  const dir = await tmpDir(t)
+  const joiner = new WallpaperCore({ storageDir: dir, deviceName: 'phone', bootstrap: tn.bootstrap })
+  await joiner.ready()
+  let requested = false
+  creator.on('pairing-request', () => { requested = true })
+  const join = joiner.joinGroup(invite)
+  join.catch(() => {}) // observed by t.exception below; keep Node quiet meanwhile
+  await until(creator, 'pairing-request', () => requested, 8000)
+  await joiner.close()
+  await t.exception(join, /closed/, 'the interrupted join rejects with closed')
+
+  const joiner2 = new WallpaperCore({ storageDir: dir, deviceName: 'phone', bootstrap: tn.bootstrap })
+  await joiner2.ready()
+  t.teardown(() => joiner2.close())
+  t.alike(await joiner2.meta.get('pending-invite'), { invite }, 'pending-invite survives a clean close')
+  await until(joiner2, 'roster-changed', () => joiner2.groupStatus === 'joining', 5000)
+  t.is(joiner2.groupStatus, 'joining', 'join resumed on the next open')
+})
+
+test('pairing: groupStatus is joining as soon as ready() resolves on a resumed join', async function (t) {
+  const tn = await makeTestnet(t)
+  const creator = new WallpaperCore({
+    storageDir: await tmpDir(t), deviceName: 'creator', bootstrap: tn.bootstrap
+  })
+  await creator.ready()
+  await creator.createGroup()
+  t.teardown(() => creator.close())
+  const invite = await creator.createInvite()
+
+  const dir = await tmpDir(t)
+  const joiner = new WallpaperCore({ storageDir: dir, deviceName: 'phone', bootstrap: tn.bootstrap })
+  await joiner.ready()
+  await joiner.meta.put('pending-invite', { invite }) // as left behind by a crash mid-join
+  await joiner.close()
+
+  const joiner2 = new WallpaperCore({ storageDir: dir, deviceName: 'phone', bootstrap: tn.bootstrap })
+  await joiner2.ready()
+  t.teardown(() => joiner2.close())
+  t.is(joiner2.groupStatus, 'joining', 'no tick where a mid-join device reads as none')
+})

@@ -1,4 +1,11 @@
+const PUSH_COALESCE_MS = 50
+
 function createBridgeMain ({ core, transport, engine = null, platform = null, loginItem = null }) {
+  // The probe spawns a subprocess (`launchctl print` on macOS), and the
+  // answer only changes through setLoginAtLogin, so one probe serves every
+  // push until the next toggle.
+  let loginProbe = null
+
   async function snapshot () {
     const inGroup = core.groupStatus === 'member'
     const snap = {
@@ -12,7 +19,10 @@ function createBridgeMain ({ core, transport, engine = null, platform = null, lo
     }
     // Key omitted (not null) when the shell has no login-item concept
     // (Android): the UI treats "absent" as "don't render the toggle".
-    if (loginItem) snap.loginAtLogin = await loginItem.isEnabled()
+    if (loginItem) {
+      if (!loginProbe) loginProbe = loginItem.isEnabled()
+      snap.loginAtLogin = await loginProbe
+    }
     return snap
   }
 
@@ -21,6 +31,15 @@ function createBridgeMain ({ core, transport, engine = null, platform = null, lo
     const item = list.find((r) => r.id === wallpaperId)
     if (!item) throw new Error('unknown received wallpaper')
     await platform.setWallpaper(item.filePath)
+  }
+
+  async function setLoginAtLogin (on) {
+    try {
+      await (on ? loginItem.enable() : loginItem.disable())
+    } finally {
+      loginProbe = null
+      pushState()
+    }
   }
 
   const commands = {
@@ -39,7 +58,7 @@ function createBridgeMain ({ core, transport, engine = null, platform = null, lo
     markApplied: (wallpaperId) => core.markApplied(wallpaperId),
     ...(engine ? { syncNow: () => engine.syncNow() } : {}),
     ...(platform ? { reapply } : {}),
-    ...(loginItem ? { setLoginAtLogin: (on) => (on ? loginItem.enable() : loginItem.disable()) } : {})
+    ...(loginItem ? { setLoginAtLogin } : {})
     // NOTE (final-review fix wave): a `quit` command used to live here
     // (`() => Pear.exit(0)`), left over from the pre-Electron-conversion
     // pear-runtime UI process shape. `Pear` is not a global in this Bare
@@ -50,7 +69,30 @@ function createBridgeMain ({ core, transport, engine = null, platform = null, lo
   }
 
   function pushEvent (event, payload) { transport.send({ t: 'evt', event, payload }) }
-  async function pushState () { pushEvent('state', await snapshot()) }
+
+  // One core change arrives as several events spread over a few ms (update,
+  // send-updated, wallpaper, applied). Wait out a short window so they share
+  // one snapshot, and keep one snapshot in flight at a time so pushes can't
+  // resolve out of order: the last push always starts after the last event.
+  let pushing = false
+  let pushAgain = false
+  async function pushState () {
+    if (pushing) { pushAgain = true; return }
+    pushing = true
+    try {
+      do {
+        await new Promise((resolve) => setTimeout(resolve, PUSH_COALESCE_MS))
+        pushAgain = false
+        try {
+          pushEvent('state', await snapshot())
+        } catch (err) {
+          pushEvent('error', { message: err.message })
+        }
+      } while (pushAgain)
+    } finally {
+      pushing = false
+    }
+  }
 
   return {
     start () {
@@ -66,16 +108,16 @@ function createBridgeMain ({ core, transport, engine = null, platform = null, lo
         }
       })
       // Forward core signals as state refreshes + scoped events.
-      const safePushState = () => pushState().catch((err) => pushEvent('error', { message: err.message }))
-      core.on('update', safePushState)
-      core.on('roster-changed', safePushState)
-      core.on('send-updated', safePushState)
-      core.on('wallpaper', safePushState)
+      core.on('update', pushState)
+      core.on('roster-changed', pushState)
+      core.on('send-updated', pushState)
+      core.on('wallpaper', pushState)
       core.on('pairing-request', (p) => pushEvent('candidate', p))
       core.on('error-joining', () => pushEvent('error', { message: 'auto-resume join failed; ask the creator for a fresh invite' }))
       if (engine && engine.on) {
         engine.on('error', (err) => pushEvent('error', { message: err.message }))
-        engine.on('applied', safePushState)
+        engine.on('applied', pushState)
+        engine.on('synced', pushState)
       }
     }
   }

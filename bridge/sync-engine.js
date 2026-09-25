@@ -11,6 +11,10 @@ function createSyncEngine ({ core, platform = null, intervalMs = 180000 }) {
   let wallpaperHandler = null
   let applying = false
   let queued = false
+  function stampSynced () {
+    engine.lastSync = Date.now()
+    ee.emit('synced')
+  }
   const engine = {
     lastSync: null,
     on: ee.on.bind(ee),
@@ -55,12 +59,22 @@ function createSyncEngine ({ core, platform = null, intervalMs = 180000 }) {
       }
     },
     async syncNow () {
-      try { await core.sync() } catch (err) { ee.emit('error', err) }
-      this.lastSync = Date.now()
+      try {
+        await core.sync()
+        stampSynced()
+      } catch (err) {
+        ee.emit('error', err)
+      }
       await this.applyPending()
     },
     start () {
-      wallpaperHandler = () => { engine.applyPending().catch((err) => ee.emit('error', err)) }
+      // A wallpaper arriving over live replication is the group reaching
+      // this device between timer syncs, which is what "last synced" means
+      // to someone looking at the screen.
+      wallpaperHandler = () => {
+        stampSynced()
+        engine.applyPending().catch((err) => ee.emit('error', err))
+      }
       core.on('wallpaper', wallpaperHandler)
       timer = setInterval(() => { engine.syncNow().catch((err) => ee.emit('error', err)) }, intervalMs)
       if (timer.unref) timer.unref()

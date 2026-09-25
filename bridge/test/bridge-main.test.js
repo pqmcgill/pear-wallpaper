@@ -103,3 +103,83 @@ test('non-member snapshot is empty (roster, sends, received all [])', async (t) 
   t.alike(r.value.sends, [])
   t.alike(r.value.received, [])
 })
+
+function stateEvents (uiT) {
+  const states = []
+  uiT.onMessage((m) => { if (m.t === 'evt' && m.event === 'state') states.push(m.payload) })
+  return states
+}
+const tick = (ms = 0) => new Promise((resolve) => setTimeout(resolve, ms))
+
+test("an engine 'synced' pushes state carrying the new lastSync", async (t) => {
+  const [mainT, uiT] = pairTransport(); const core = fakeCore()
+  const engine = Object.assign(new EventEmitter(), { lastSync: null, async syncNow () {} })
+  createBridgeMain({ core, engine, transport: mainT }).start()
+  const states = stateEvents(uiT)
+  engine.lastSync = 1234
+  engine.emit('synced')
+  await tick(100)
+  t.is(states.length, 1)
+  t.is(states[0]?.lastSync, 1234)
+})
+
+test('a burst of core events coalesces into at most two pushes, the last one current', async (t) => {
+  const [mainT, uiT] = pairTransport(); const core = fakeCore()
+  let received = 0
+  core.listReceived = async () => { await tick(5); return Array.from({ length: received }, (_, i) => ({ id: 'r' + i })) }
+  createBridgeMain({ core, transport: mainT }).start()
+  const states = stateEvents(uiT)
+  for (const event of ['update', 'send-updated', 'update', 'wallpaper', 'roster-changed']) {
+    received++
+    core.emit(event)
+    await tick(1)
+  }
+  await tick(150)
+  t.ok(states.length >= 1 && states.length <= 2, `pushes=${states.length}`)
+  t.is(states[states.length - 1].received.length, 5, 'final push reflects the latest state')
+})
+
+test('pushes stay in order when snapshot latency varies', async (t) => {
+  const [mainT, uiT] = pairTransport(); const core = fakeCore()
+  let received = 0
+  const delays = [100, 1, 80, 1, 60, 1]
+  let calls = 0
+  core.listReceived = async () => {
+    const n = received
+    await tick(delays[calls++ % delays.length])
+    return Array.from({ length: n }, (_, i) => ({ id: 'r' + i }))
+  }
+  createBridgeMain({ core, transport: mainT }).start()
+  const states = stateEvents(uiT)
+  for (let i = 0; i < 6; i++) {
+    received++
+    core.emit('update')
+    await tick(60)
+  }
+  await tick(800)
+  const lengths = states.map((s) => s.received.length)
+  t.alike(lengths, [...lengths].sort((a, b) => a - b), `pushes never go backwards: ${lengths}`)
+  t.is(lengths[lengths.length - 1], 6, 'final push reflects the latest state')
+})
+
+test('the login-item probe runs once, not per push, and refreshes after setLoginAtLogin', async (t) => {
+  const [mainT, uiT] = pairTransport(); const core = fakeCore()
+  let enabled = false; let probes = 0
+  const loginItem = {
+    async isEnabled () { probes++; return enabled },
+    async enable () { enabled = true },
+    async disable () { enabled = false }
+  }
+  createBridgeMain({ core, loginItem, transport: mainT }).start()
+  const states = stateEvents(uiT)
+  for (let i = 0; i < 4; i++) { core.emit('update'); await tick(100) }
+  t.is(probes, 1, 'one launchctl probe across several pushes')
+  t.is(states[states.length - 1].loginAtLogin, false)
+
+  const reply = new Promise((resolve) => uiT.onMessage((m) => { if (m.t === 'res' && m.id === 11) resolve(m) }))
+  uiT.send({ t: 'req', id: 11, cmd: 'setLoginAtLogin', args: [true] })
+  t.ok((await reply).ok)
+  await tick(100)
+  t.is(states[states.length - 1].loginAtLogin, true, 'a push after the toggle shows the new value')
+  t.is(probes, 2)
+})

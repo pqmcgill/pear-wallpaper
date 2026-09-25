@@ -1,0 +1,10 @@
+Live check: b offline, a sends FIRST then SECOND, b relaunches. Which picture is b's desktop on?
+(script: c1-live.sh; sha256 of the two fixtures vs the Mac's desktop picture after b catches up)
+
+BEFORE (dev @ e88fbe1):
+  first   14f8d532...  second  3e034705...  desktop  14f8d532...  -> ends on FIRST (older)
+  sender statuses newest-first: delivered, delivered
+
+AFTER (fix/c1-newest-wins):
+  first   d3caf48f...  second  94c3feda...  desktop  94c3feda...  -> ends on SECOND (newest)
+  sender statuses newest-first: delivered, superseded
